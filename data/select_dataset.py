@@ -18,7 +18,12 @@ def define_Dataset(dataset_opt):
     # CC-SAG-PI d.1.1
     elif dataset_type in ['ccsagpi']:
         from data.dataset_CCsagpi import DatasetCCsagpi as D
-
+    
+    # ------------------------------------------------
+    # Enhanced Dataset with DICOM/JPG support and comprehensive noise
+    # ------------------------------------------------
+    elif dataset_type in ['enhanced', 'enhanced_npi', 'dicom_jpg']:
+        from data.dataset_enhanced import DatasetEnhanced as D
 
     else:
         raise NotImplementedError('Dataset [{:s}] is not found.'.format(dataset_type))

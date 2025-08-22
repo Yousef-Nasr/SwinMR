@@ -1,0 +1,9 @@
+{
+  "source_dir": "/path/to/source/dicom_jpg_data",
+  "target_dir": "/path/to/organized/data",
+  "train_ratio": 0.8,
+  "organize_by_patient": true,
+  "min_size": [64, 64],
+  "max_size": [512, 512],
+  "normalize": true
+}

@@ -1,0 +1,42 @@
+{
+  "gaussian_noise": {
+    "enabled": true,
+    "weight": 0.9,
+    "variance_range": [0.005, 0.1],
+    "snr_range": [15, 35]
+  },
+  "rician_noise": {
+    "enabled": true,
+    "weight": 0.8,
+    "sigma_range": [0.02, 0.06],
+    "amplitude_range": [0.15, 0.4]
+  },
+  "ghosting": {
+    "enabled": true,
+    "weight": 0.6,
+    "intensity_range": [0.15, 0.5],
+    "offset_range": [8, 25],
+    "direction": ["horizontal", "vertical", "both"]
+  },
+  "aliasing": {
+    "enabled": true,
+    "weight": 0.5,
+    "fold_factor_range": [2, 4],
+    "intensity_range": [0.3, 0.7]
+  },
+  "line_noise": {
+    "enabled": true,
+    "weight": 0.7,
+    "coverage_max": 0.25,
+    "intensity_range": [0.2, 0.6],
+    "direction": ["horizontal", "vertical"],
+    "line_width_range": [1, 3]
+  },
+  "zipper_artifact": {
+    "enabled": true,
+    "weight": 0.5,
+    "intensity_range": [0.3, 0.8],
+    "frequency_range": [0.15, 0.35],
+    "direction": ["horizontal", "vertical"]
+  }
+}

@@ -1,0 +1,22 @@
+# Enhanced MRI Data System Requirements
+# Additional requirements for the enhanced noise generation and data preparation system
+
+# Core scientific computing
+numpy>=1.18.0
+scipy>=1.5.0
+
+# Image processing
+opencv-python>=4.0.0
+Pillow>=8.0.0
+
+# Optional DICOM support
+pydicom>=2.0.0
+
+# For the original SwinMR (already in README.md)
+matplotlib>=3.3.4
+scikit-image>=0.17.2
+tensorboardX>=2.4
+timm>=0.4.12
+torch>=1.9.0
+torchvision>=0.10.0
+pytorch-fid>=0.2.0
