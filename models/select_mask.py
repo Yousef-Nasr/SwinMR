@@ -179,7 +179,8 @@ def define_Mask(opt):
     else:
         raise NotImplementedError("Model [{:s}] is not defined.".format(mask_name))
 
-    print("Training model [{:s}] is created.".format(mask_name))
+    # Removed verbose print statement to reduce console spam during training
+    # print("Training model [{:s}] is created.".format(mask_name))
 
     return mask
 
