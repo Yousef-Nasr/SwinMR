@@ -221,23 +221,20 @@ def main(json_path=""):
             # 4) training information
             # -------------------------------
             if opt["rank"] == 0:
-                # Real-time progress display
-                logs = model.current_log()
-                progress_message = f"Epoch:{epoch:3d} | Iter:{current_step:8,d} | LR:{model.current_learning_rate():.3e} | G_loss:{logs.get('G_loss', 0):.4f}"
+                # Show progress only every 1000 iterations (or at specific milestones)
+                if current_step % 1000 == 0 or current_step == 1:
+                    logs = model.current_log()
+                    progress_message = f"Epoch:{epoch:3d} | Iter:{current_step:8,d} | LR:{model.current_learning_rate():.3e} | G_loss:{logs.get('G_loss', 0):.4f}"
 
-                # Add additional losses if available
-                if "G_loss_image" in logs:
-                    progress_message += f" | Img:{logs['G_loss_image']:.4f}"
-                if "G_loss_frequency" in logs:
-                    progress_message += f" | Freq:{logs['G_loss_frequency']:.4f}"
-                if "G_loss_preceptual" in logs:
-                    progress_message += f" | Perc:{logs['G_loss_preceptual']:.4f}"
+                    # Add additional losses if available
+                    if "G_loss_image" in logs:
+                        progress_message += f" | Img:{logs['G_loss_image']:.4f}"
+                    if "G_loss_frequency" in logs:
+                        progress_message += f" | Freq:{logs['G_loss_frequency']:.4f}"
+                    if "G_loss_preceptual" in logs:
+                        progress_message += f" | Perc:{logs['G_loss_preceptual']:.4f}"
 
-                # Print progress on same line, new line every 1000 iterations
-                if current_step % 1000 == 0:
-                    print(f"\r{progress_message}")  # New line
-                else:
-                    print(f"\r{progress_message}", end="", flush=True)  # Same line
+                    print(progress_message)  # Always new line for 1000-iter updates
 
             # Detailed logging at checkpoint intervals
             if (
