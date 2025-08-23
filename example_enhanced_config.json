@@ -1,0 +1,37 @@
+{
+  "task": "swinmr_enhanced_noise_example",
+  "model": "swinmr_npi",
+  "mask": "G1D30",
+  "gpu_ids": [
+    0
+  ],
+  "dist": false,
+  "n_channels": 1,
+  "manual_seed": 42,
+  "datasets": {
+    "train": {
+      "name": "train_dataset",
+      "dataset_type": "ccsagnpi",
+      "dataroot_H": "./testsets/db_test",
+      "mask": "G1D30",
+      "H_size": 96,
+      "use_enhanced_noise": true,
+      "noise_config_path": "configs/noise_config_default.json",
+      "random_mask_selection": true,
+      "available_masks": [
+        "G1D20",
+        "G1D30",
+        "G1D40",
+        "R30",
+        "R40",
+        "R50",
+        "S30",
+        "S40",
+        "S50"
+      ],
+      "is_mini_dataset": false,
+      "dataloader_shuffle": true,
+      "dataloader_batch_size": 2
+    }
+  }
+}

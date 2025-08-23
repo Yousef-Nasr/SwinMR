@@ -27,7 +27,6 @@ Please cite:
 
 ![Overview_of_SwinMR](./tmp/files/SwinMR.png)
 
-
 ## Highlight
 
 - A novel Swin transformer-based model for fast MRI reconstruction was proposed.
@@ -67,51 +66,20 @@ The enhanced system supports DICOM and standard image formats (JPG, PNG, BMP, TI
 
 Place your MRI data in any folder structure. The system will automatically find all supported files:
 
-**Option A: Anatomy-based organization (recommended for your case):**
-```
-your_raw_data/
-├── brain/
-│   ├── brain_scan_001.dcm     # DICOM files
-│   ├── brain_scan_002.dcm
-│   ├── brain_mri_001.jpg      # JPG/PNG images
-│   ├── brain_mri_002.png
-│   └── ...
-├── knee/
-│   ├── knee_scan_001.dcm
-│   ├── knee_scan_002.dcm
-│   ├── knee_image_001.jpg
-│   └── ...
-├── spine/
-│   ├── spine_001.dcm
-│   ├── spine_002.jpg
-│   └── ...
-└── other_anatomy/
-    ├── scan001.dcm
-    ├── scan002.jpg
-    └── ...
-```
-
-**Option B: Patient-based organization:**
 ```
 your_raw_data/
 ├── patient001/
 │   ├── series001/
-│   │   ├── image001.dcm
+│   │   ├── image001.dcm     # DICOM files
+│   │   ├── image002.dcm
 │   │   └── ...
 │   └── series002/
 ├── patient002/
-└── ...
-```
-
-**Option C: Mixed or flat organization:**
-```
-your_raw_data/
-├── all_scans/
-│   ├── brain_001.dcm
-│   ├── knee_001.jpg
-│   ├── spine_001.png
+├── scans/
+│   ├── scan001.jpg          # JPG/PNG images
+│   ├── scan002.png
 │   └── ...
-└── more_scans/
+└── more_data/
     └── ...
 ```
 
@@ -121,28 +89,24 @@ your_raw_data/
 # Option 1: Interactive setup (recommended for first-time users)
 python organize_data.py interactive
 
-# Option 2: Command line setup with custom target folder
-python organize_data.py setup --base-path ./datahere
-python organize_data.py prepare --source ./your_raw_data --target ./datahere
+# Option 2: Command line setup
+python organize_data.py setup --base-path ./my_mri_project
+python organize_data.py prepare --source ./your_raw_data --target ./my_mri_project/processed_data
 
-# Option 3: Use configuration file (modify organize_by_patient to false for anatomy-based data)
+# Option 3: Use configuration file
 python organize_data.py prepare --config ./configs/data_prep_config.json
 ```
 
-**Important for anatomy-based data:** When using the interactive setup, choose **"No"** when asked about organizing by patient, since your data is organized by anatomy type (brain, knee, etc.) rather than by patient ID.
+This will create organized train/test folders:
 
-This will create organized train/test folders in your desired location:
 ```
-datahere/
+my_mri_project/processed_data/
 ├── train/
-│   ├── img_train_000001_brain_brain_scan_001.npy
-│   ├── img_train_000002_brain_brain_scan_002.npy
-│   ├── img_train_000003_knee_knee_scan_001.npy
-│   ├── img_train_000004_spine_spine_001.npy
+│   ├── img_train_000001_patient001_series001_image001.npy
+│   ├── img_train_000002_patient001_series001_image002.npy
 │   └── ...
 ├── test/
-│   ├── img_test_000001_brain_brain_mri_001.npy
-│   ├── img_test_000002_knee_knee_image_001.npy
+│   ├── img_test_000001_patient002_series001_image001.npy
 │   └── ...
 └── metadata.json
 ```
@@ -157,7 +121,7 @@ Create or modify your training configuration file:
   "datasets": {
     "train": {
       "dataset_type": "enhanced",
-      "dataroot_H": "./datahere/train",
+      "dataroot_H": "./my_mri_project/processed_data/train",
       "use_enhanced_noise": true,
       "noise_config_path": "./configs/noise_config_default.json",
       "batch_size": 1,
@@ -166,7 +130,7 @@ Create or modify your training configuration file:
     },
     "val": {
       "dataset_type": "enhanced", 
-      "dataroot_H": "./datahere/test",
+      "dataroot_H": "./my_mri_project/processed_data/test",
       "use_enhanced_noise": false
     }
   },
@@ -197,20 +161,6 @@ Create or modify your training configuration file:
 }
 ```
 
-**For anatomy-based data preparation, modify `data_prep_config.json`:**
-```json
-{
-  "source_dir": "./your_raw_data",
-  "target_dir": "./datahere", 
-  "train_ratio": 0.8,
-  "organize_by_patient": false,
-  "min_size": [64, 64],
-  "max_size": [512, 512],
-  "normalize": true
-}
-```
-*Note: Set `organize_by_patient: false` for anatomy-based folder structure*
-
 #### 4. Start Training
 
 ```bash
@@ -226,42 +176,27 @@ tensorboard --logdir ./experiments/tb_logger
 Choose from three predefined noise levels:
 
 - **Mild**: `./configs/noise_config_mild.json` - Light noise for high-quality data
-- **Default**: `./configs/noise_config_default.json` - Moderate noise for typical scenarios  
+- **Default**: `./configs/noise_config_default.json` - Moderate noise for typical scenarios
 - **Aggressive**: `./configs/noise_config_aggressive.json` - Heavy noise for robust training
 
 Or create custom noise configuration by modifying the JSON files.
 
 #### Key Advantages of Enhanced Dataset:
 
-✅ **No sensitivity maps required** - Simplified data requirements  
-✅ **DICOM support** - Direct loading of medical imaging format  
-✅ **Standard image formats** - JPG, PNG, BMP, TIFF support  
-✅ **Realistic noise simulation** - 6 types of MRI artifacts  
-✅ **Automatic organization** - Patient-aware train/test splitting  
-✅ **Drop-in replacement** - Compatible with existing SwinMR code  
+✅ **No sensitivity maps required** - Simplified data requirements
+✅ **DICOM support** - Direct loading of medical imaging format
+✅ **Standard image formats** - JPG, PNG, BMP, TIFF support
+✅ **Realistic noise simulation** - 6 types of MRI artifacts
+✅ **Automatic organization** - Patient-aware train/test splitting
+✅ **Drop-in replacement** - Compatible with existing SwinMR code
 
 For detailed configuration options, see `ENHANCED_README.md`.
 
 ## Training and Testing
+
 Use different options (json files) to train different networks.
 
-### Enhanced Dataset Training and Testing
-
-#### Training with Enhanced Dataset (DICOM/JPG):
-
-```bash
-# Train SwinMR with enhanced dataset
-python main_train_swinmr.py --opt ./options/SwinMR/example/train_swinmr_enhanced_dicom_jpg.json
-```
-
-#### Testing with Enhanced Dataset:
-
-```bash
-# Test SwinMR with enhanced dataset  
-python main_test_swinmr_CC.py --opt ./options/SwinMR/example/test/test_swinmr_enhanced_dicom_jpg.json
-```
-
-### Calgary Campinas multi-channel dataset (CC) 
+### Calgary Campinas multi-channel dataset (CC)
 
 To train SwinMR (PI) on CC:
 
@@ -279,13 +214,10 @@ To test SwinMR (nPI) on CC:
 
 `python main_test_swinmr_CC.py --opt ./options/example/test/test_swinmr_CCnpi_G1D30.json`
 
-
 This repository is based on:
 
-SwinIR: Image Restoration Using Swin Transformer 
+SwinIR: Image Restoration Using Swin Transformer
 ([code](https://github.com/JingyunLiang/SwinIR) and [paper](https://openaccess.thecvf.com/content/ICCV2021W/AIM/html/Liang_SwinIR_Image_Restoration_Using_Swin_Transformer_ICCVW_2021_paper.html));
-
 
 Swin Transformer: Hierarchical Vision Transformer using Shifted Windows
 ([code](https://github.com/microsoft/Swin-Transformer) and [paper](https://openaccess.thecvf.com/content/ICCV2021/html/Liu_Swin_Transformer_Hierarchical_Vision_Transformer_Using_Shifted_Windows_ICCV_2021_paper.html)).
-
