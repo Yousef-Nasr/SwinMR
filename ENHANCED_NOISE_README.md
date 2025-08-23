@@ -30,6 +30,12 @@ The enhanced noise system provides:
 - **Default**: `configs/noise_config_default.json` - Balanced noise levels
 - **Aggressive**: `configs/noise_config_aggressive.json` - Strong noise for robustness
 
+### 4. Limited Noise Types (NEW!)
+- **1-2 noise types per image**: Prevents over-noising during training
+- **Smart selection**: Randomly chooses 1-2 noise types from available options
+- **Mask as noise**: Can count mask selection as one of the noise types
+- **Realistic training**: More closely mimics real-world MRI acquisition
+
 ## Usage
 
 ### 1. Training with Enhanced Noise
@@ -51,6 +57,9 @@ Add these options to your training JSON configuration:
       "use_enhanced_noise": true,
       "noise_config_path": "configs/noise_config_default.json",
       "random_mask_selection": true,
+      "max_noise_types": 2,
+      "min_noise_types": 1,
+      "include_mask_as_noise": true,
       "available_masks": [
         "G1D10", "G1D20", "G1D30", "G1D40", "G1D50",
         "G2D10", "G2D20", "G2D30", "G2D40", "G2D50",
@@ -94,6 +103,9 @@ python test_enhanced_noise_system.py
 | `noise_config_path` | Path to noise configuration JSON | `null` |
 | `random_mask_selection` | Randomly select masks during training | `false` |
 | `available_masks` | List of mask types to randomly choose from | `["G1D30"]` |
+| `max_noise_types` | Maximum number of noise types per image (1-2) | `2` |
+| `min_noise_types` | Minimum number of noise types per image (1-2) | `1` |
+| `include_mask_as_noise` | Count mask selection as one noise type | `true` |
 
 ### Noise Configuration Structure
 
@@ -189,5 +201,29 @@ cp configs/noise_config_default.json configs/my_custom_noise.json
 # Test noise on your own image
 python generate_noise_variations.py -i testsets/db_test/imgGT_1_1.npy -o my_noise_test -n 15
 ```
+
+## Noise Type Selection Patterns
+
+### Pattern 1: Mask as Noise Type (include_mask_as_noise = true)
+```
+Sample 1: Mask: G1D30 only (1 noise type total)
+Sample 2: Mask: R50 + Noise: gaussian_noise (2 noise types total)
+Sample 3: Mask: S30 + Noise: rician_noise (2 noise types total)
+Sample 4: Mask: G2D40 only (1 noise type total)
+```
+
+### Pattern 2: Mask Separate (include_mask_as_noise = false)
+```
+Sample 1: Mask: G1D30 + Noise: gaussian_noise (mask + 1 noise)
+Sample 2: Mask: R50 + Noise: [ghosting, line_noise] (mask + 2 noise)
+Sample 3: Mask: S30 + Noise: rician_noise (mask + 1 noise)
+Sample 4: Mask: G2D40 + Noise: [aliasing, zipper_artifact] (mask + 2 noise)
+```
+
+### Benefits of Limited Noise Types
+- **Prevents over-corruption**: Too many noise types can make images unrecoverable
+- **Realistic simulation**: Real MRI scans typically have 1-2 dominant artifacts
+- **Better training**: Models learn to handle specific artifact combinations
+- **Improved generalization**: Each sample focuses on different noise patterns
 
 This enhanced noise system provides a comprehensive solution for training robust MRI reconstruction models that can handle real-world artifacts and variations.

@@ -40,6 +40,17 @@ class DatasetCCsagnpi(data.Dataset):
             "available_masks", ["G1D30"]
         )  # Default mask
 
+        # Noise type limitation (1-2 types per image)
+        self.max_noise_types = self.opt.get(
+            "max_noise_types", 2
+        )  # Maximum 1-2 noise types per image
+        self.min_noise_types = self.opt.get(
+            "min_noise_types", 1
+        )  # Minimum 1 noise type per image
+        self.include_mask_as_noise = self.opt.get(
+            "include_mask_as_noise", True
+        )  # Count mask as a noise type
+
         # Initialize noise generator if enhanced noise is enabled
         if self.use_enhanced_noise:
             self.noise_generator = MRINoiseGenerator(self.noise_config_path)
@@ -89,13 +100,56 @@ class DatasetCCsagnpi(data.Dataset):
         H_path = self.paths_H[index]
         img_H, _ = self.load_images(H_path, 0, isSM=False)
 
-        # Apply enhanced noise to the ground truth image if enabled
+        # Apply enhanced noise with limitation to 1-2 types
         if self.use_enhanced_noise:
-            # Apply various noise types to the image before k-space undersampling
-            img_H_noisy = self.noise_generator.apply_noise(img_H.squeeze())
-            img_H_noisy = np.expand_dims(img_H_noisy, axis=2)
-            # Use the noisy image as input for further processing
-            img_for_undersampling = img_H_noisy
+            # Get all available noise types
+            available_noise_types = [
+                "gaussian_noise",
+                "rician_noise",
+                "ghosting",
+                "aliasing",
+                "line_noise",
+                "zipper_artifact",
+            ]
+
+            # Determine how many noise types to apply (1 or 2)
+            num_noise_types = random.randint(self.min_noise_types, self.max_noise_types)
+
+            # If mask is considered as noise type, we might reduce other noise types
+            if self.include_mask_as_noise and self.random_mask_selection:
+                # Mask selection counts as one noise type
+                remaining_noise_slots = max(0, num_noise_types - 1)
+                if remaining_noise_slots == 0:
+                    # Only apply mask, no other noise
+                    img_for_undersampling = img_H
+                else:
+                    # Apply 1 additional noise type + mask
+                    selected_noise_types = random.sample(
+                        available_noise_types, remaining_noise_slots
+                    )
+                    img_H_noisy = self.noise_generator.apply_noise(
+                        img_H.squeeze(), selected_noise_types
+                    )
+                    img_H_noisy = np.expand_dims(img_H_noisy, axis=2)
+                    img_for_undersampling = img_H_noisy
+            else:
+                # Apply 1-2 noise types without considering mask as noise
+                selected_noise_types = random.sample(
+                    available_noise_types, num_noise_types
+                )
+                img_H_noisy = self.noise_generator.apply_noise(
+                    img_H.squeeze(), selected_noise_types
+                )
+                img_H_noisy = np.expand_dims(img_H_noisy, axis=2)
+                img_for_undersampling = img_H_noisy
+
+            # Debug info (can be removed in production)
+            if hasattr(self, "debug_mode") and self.debug_mode:
+                if self.include_mask_as_noise and self.random_mask_selection:
+                    noise_info = f"Mask: {selected_mask_name}, Additional: {selected_noise_types if remaining_noise_slots > 0 else 'None'}"
+                else:
+                    noise_info = f"Noise types: {selected_noise_types}"
+                print(f"Sample {index}: {noise_info}")
         else:
             img_for_undersampling = img_H
 
