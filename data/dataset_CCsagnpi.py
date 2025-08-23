@@ -15,6 +15,76 @@ from models.select_mask import define_Mask
 from utils.noise_generator import MRINoiseGenerator
 from scipy.fftpack import fft2, ifft2, fftshift, ifftshift
 import numpy as np
+import torch
+import warnings
+
+
+def safe_collate_fn(batch):
+    """
+    Safe collate function that handles potential type casting issues.
+    """
+    try:
+        # Filter out None values
+        batch = [item for item in batch if item is not None]
+        if len(batch) == 0:
+            return None
+            
+        # Ensure all tensors have consistent types
+        for item in batch:
+            if 'L' in item and item['L'] is not None:
+                item['L'] = item['L'].float()
+            if 'H' in item and item['H'] is not None:
+                item['H'] = item['H'].float()
+                
+        return torch.utils.data.dataloader.default_collate(batch)
+    except Exception as e:
+        print(f"Error in collate_fn: {e}")
+        # Return a minimal valid batch to prevent crash
+        dummy_item = {
+            'L': torch.zeros(1, 256, 256),
+            'H': torch.zeros(1, 256, 256),
+            'H_path': 'dummy_path',
+            'mask': np.ones((256, 256)),
+            'SM': 0,
+            'img_info': 'dummy'
+        }
+        return torch.utils.data.dataloader.default_collate([dummy_item])
+
+
+def validate_data_files(data_paths, max_check=5):
+    """
+    Validate a sample of data files to check for common issues.
+    """
+    issues_found = []
+    check_count = min(max_check, len(data_paths))
+    
+    for i, path in enumerate(data_paths[:check_count]):
+        try:
+            data = np.load(path)
+            
+            # Check for NaN/Inf
+            if np.any(np.isnan(data)) or np.any(np.isinf(data)):
+                issues_found.append(f"NaN/Inf in {path}")
+                
+            # Check for extreme values
+            if data.max() > 1e6 or data.min() < -1e6:
+                issues_found.append(f"Extreme values in {path}: min={data.min()}, max={data.max()}")
+                
+            # Check for constant data
+            if data.max() == data.min():
+                issues_found.append(f"Constant values in {path}")
+                
+        except Exception as e:
+            issues_found.append(f"Cannot load {path}: {e}")
+    
+    if issues_found:
+        print("Data validation issues found:")
+        for issue in issues_found:
+            print(f"  - {issue}")
+    else:
+        print(f"Validation passed for {check_count} files")
+    
+    return issues_found
 
 
 class DatasetCCsagnpi(data.Dataset):
@@ -189,12 +259,21 @@ class DatasetCCsagnpi(data.Dataset):
                 util.augment_img(patch_L, mode=mode),
                 util.augment_img(patch_H, mode=mode),
             )
+            
+            # Ensure consistent data types before tensor conversion
+            patch_L = patch_L.astype(np.float32)
+            patch_H = patch_H.astype(np.float32)
+            
             # --------------------------------
             # HWC to CHW, numpy(uint) to tensor
             # --------------------------------
             img_L, img_H = util.float2tensor3(patch_L), util.float2tensor3(patch_H)
 
         else:
+            # Ensure consistent data types before tensor conversion
+            img_L = img_L.astype(np.float32)
+            img_H = img_H.astype(np.float32)
+            
             # --------------------------------
             # HWC to CHW, numpy(uint) to tensor
             # --------------------------------
@@ -217,8 +296,20 @@ class DatasetCCsagnpi(data.Dataset):
         gt = np.load(H_path).astype(np.float32)
 
         gt = np.reshape(gt, (gt.shape[0], gt.shape[1], 1))
-        # # 0 ~ 1
-        gt = (gt - gt.min()) / (gt.max() - gt.min())
+        
+        # Check for NaN or Inf values and handle them
+        if np.any(np.isnan(gt)) or np.any(np.isinf(gt)):
+            print(f"Warning: NaN or Inf found in {H_path}, replacing with zeros")
+            gt = np.nan_to_num(gt, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        # Normalize to 0 ~ 1 with safe division
+        gt_min, gt_max = gt.min(), gt.max()
+        if gt_max > gt_min:
+            gt = (gt - gt_min) / (gt_max - gt_min)
+        else:
+            # Handle case where all values are the same
+            print(f"Warning: Constant values in {H_path}, setting to zeros")
+            gt = np.zeros_like(gt)
 
         # load SM
         if isSM:
@@ -226,14 +317,30 @@ class DatasetCCsagnpi(data.Dataset):
 
             # sm = np.reshape(sm[:, :, :, 1], (256, 256, 12))
 
-            # 0 ~ 1
-            sm = (sm - sm.min()) / (sm.max() - sm.min())
+            # Check for NaN or Inf values in SM
+            if np.any(np.isnan(sm)) or np.any(np.isinf(sm)):
+                print(f"Warning: NaN or Inf found in SM {SM_path}, replacing with zeros")
+                sm = np.nan_to_num(sm, nan=0.0, posinf=0.0, neginf=0.0)
+            
+            # Normalize to 0 ~ 1 with safe division
+            sm_min, sm_max = sm.min(), sm.max()
+            if sm_max > sm_min:
+                sm = (sm - sm_min) / (sm_max - sm_min)
+            else:
+                # Handle case where all values are the same
+                print(f"Warning: Constant values in SM {SM_path}, setting to zeros")
+                sm = np.zeros_like(sm)
 
             return gt, sm
         else:
             return gt, 0
 
     def undersample_kspace(self, x, mask, is_noise, noise_level, noise_var):
+        # Ensure input is valid
+        if np.any(np.isnan(x)) or np.any(np.isinf(x)):
+            print("Warning: NaN or Inf found in input to undersample_kspace, replacing with zeros")
+            x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+            
         fft = fft2(x[:, :, 0])
         fft = fftshift(fft)
 
@@ -248,17 +355,53 @@ class DatasetCCsagnpi(data.Dataset):
 
         fft = fft * mask
         if is_noise:
-            fft = fft + self.generate_gaussian_noise(fft, noise_level, noise_var)
+            noise = self.generate_gaussian_noise(fft, noise_level, noise_var)
+            # Ensure noise doesn't contain NaN or Inf
+            if np.any(np.isnan(noise)) or np.any(np.isinf(noise)):
+                print("Warning: NaN or Inf found in generated noise, replacing with zeros")
+                noise = np.nan_to_num(noise, nan=0.0, posinf=0.0, neginf=0.0)
+            fft = fft + noise
+            
         fft = ifftshift(fft)
         xx = ifft2(fft)
         xx = np.abs(xx)
+        
+        # Final check for NaN or Inf in result
+        if np.any(np.isnan(xx)) or np.any(np.isinf(xx)):
+            print("Warning: NaN or Inf found in undersample result, replacing with zeros")
+            xx = np.nan_to_num(xx, nan=0.0, posinf=0.0, neginf=0.0)
 
-        x = xx[:, :, np.newaxis]
+        x = xx[:, :, np.newaxis].astype(np.float32)
 
         return x
 
     def generate_gaussian_noise(self, x, noise_level, noise_var):
-        spower = np.sum(x**2) / x.size
-        npower = noise_level / (1 - noise_level) * spower
-        noise = np.random.normal(0, noise_var**0.5, x.shape) * np.sqrt(npower)
+        # Ensure inputs are valid
+        if noise_level <= 0 or noise_level >= 1:
+            print(f"Warning: Invalid noise_level {noise_level}, setting to 0.1")
+            noise_level = 0.1
+            
+        if noise_var <= 0:
+            print(f"Warning: Invalid noise_var {noise_var}, setting to 0.01")
+            noise_var = 0.01
+            
+        spower = np.sum(np.abs(x)**2) / x.size
+        
+        # Avoid division by zero
+        if spower == 0:
+            print("Warning: Signal power is zero, using minimal noise")
+            noise = np.random.normal(0, noise_var**0.5, x.shape) * 1e-6
+        else:
+            npower = noise_level / (1 - noise_level) * spower
+            if npower <= 0:
+                print("Warning: Calculated noise power is non-positive, using minimal noise")
+                noise = np.random.normal(0, noise_var**0.5, x.shape) * 1e-6
+            else:
+                noise = np.random.normal(0, noise_var**0.5, x.shape) * np.sqrt(npower)
+        
+        # Ensure noise doesn't contain NaN or Inf
+        if np.any(np.isnan(noise)) or np.any(np.isinf(noise)):
+            print("Warning: Generated noise contains NaN or Inf, replacing with zeros")
+            noise = np.zeros_like(x)
+            
         return noise

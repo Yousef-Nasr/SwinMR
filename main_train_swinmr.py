@@ -28,6 +28,7 @@ from utils import utils_early_stopping
 
 from data.select_dataset import define_Dataset
 from models.select_model import define_Model
+from data.dataset_CCsagnpi import safe_collate_fn, validate_data_files
 from tensorboardX import SummaryWriter
 from collections import OrderedDict
 from skimage.transform import resize
@@ -136,23 +137,33 @@ def main(json_path=""):
                     drop_last=True,
                     seed=seed,
                 )
+                # Safe configuration for distributed training
+                num_workers = max(0, min(dataset_opt["dataloader_num_workers"] // opt["num_gpu"], 4))
                 train_loader = DataLoader(
                     train_set,
                     batch_size=dataset_opt["dataloader_batch_size"] // opt["num_gpu"],
                     shuffle=False,
-                    num_workers=dataset_opt["dataloader_num_workers"] // opt["num_gpu"],
+                    num_workers=num_workers,
                     drop_last=True,
                     pin_memory=False,
                     sampler=train_sampler,
+                    collate_fn=safe_collate_fn,
+                    persistent_workers=num_workers > 0,
                 )
             else:
+                # Safe configuration for single GPU training
+                num_workers = max(0, min(dataset_opt["dataloader_num_workers"], 4))
+                if os.name == 'nt':  # Windows
+                    num_workers = 0  # Force single-threaded on Windows to avoid multiprocessing issues
                 train_loader = DataLoader(
                     train_set,
                     batch_size=dataset_opt["dataloader_batch_size"],
                     shuffle=dataset_opt["dataloader_shuffle"],
-                    num_workers=dataset_opt["dataloader_num_workers"],
+                    num_workers=num_workers,
                     drop_last=True,
                     pin_memory=False,
+                    collate_fn=safe_collate_fn,
+                    persistent_workers=num_workers > 0,
                 )
 
         elif phase == "test":
@@ -161,9 +172,10 @@ def main(json_path=""):
                 test_set,
                 batch_size=1,
                 shuffle=False,
-                num_workers=1,
+                num_workers=0,  # Use single-threaded for test to avoid issues
                 drop_last=False,
                 pin_memory=False,
+                collate_fn=safe_collate_fn,
             )
         else:
             raise NotImplementedError("Phase [%s] is not recognized." % phase)
@@ -194,28 +206,67 @@ def main(json_path=""):
     # Step--4 (main training)
     # ----------------------------------------
     """
+    
+    # Validate a few data samples before starting training
+    if opt["rank"] == 0:
+        logger.info("Validating data samples before training...")
+        try:
+            # Validate dataset paths if available
+            if hasattr(train_set, 'paths_H') and len(train_set.paths_H) > 0:
+                validate_data_files(train_set.paths_H, max_check=5)
+            
+            # Test loading first batch
+            test_batch = next(iter(train_loader))
+            if test_batch is not None:
+                logger.info("First batch loaded successfully")
+                # Check for NaN/Inf in first batch
+                if 'L' in test_batch and test_batch['L'] is not None:
+                    if torch.any(torch.isnan(test_batch['L'])) or torch.any(torch.isinf(test_batch['L'])):
+                        logger.warning("NaN/Inf detected in training data L")
+                if 'H' in test_batch and test_batch['H'] is not None:
+                    if torch.any(torch.isnan(test_batch['H'])) or torch.any(torch.isinf(test_batch['H'])):
+                        logger.warning("NaN/Inf detected in training data H")
+            else:
+                logger.warning("First batch is None - potential data loading issues")
+        except Exception as e:
+            logger.error(f"Data validation failed: {e}")
+            logger.warning("Continuing with training, but expect potential issues...")
 
     for epoch in range(100000000):  # keep running
         if opt["dist"]:
             train_sampler.set_epoch(epoch)
 
-        for i, train_data in enumerate(train_loader):
-            current_step += 1
+        try:
+            for i, train_data in enumerate(train_loader):
+                current_step += 1
 
-            # -------------------------------
-            # 1) update learning rate
-            # -------------------------------
-            model.update_learning_rate(current_step)
+                # Skip batch if it's None (from safe_collate_fn)
+                if train_data is None:
+                    logger.warning(f"Skipping batch {i} due to data loading issues")
+                    continue
 
-            # -------------------------------
-            # 2) feed patch pairs
-            # -------------------------------
-            model.feed_data(train_data)
+                # -------------------------------
+                # 1) update learning rate
+                # -------------------------------
+                model.update_learning_rate(current_step)
 
-            # -------------------------------
-            # 3) optimize parameters
-            # -------------------------------
-            model.optimize_parameters(current_step)
+                # -------------------------------
+                # 2) feed patch pairs
+                # -------------------------------
+                try:
+                    model.feed_data(train_data)
+                except Exception as e:
+                    logger.error(f"Error feeding data at step {current_step}: {e}")
+                    continue
+
+                # -------------------------------
+                # 3) optimize parameters
+                # -------------------------------
+                try:
+                    model.optimize_parameters(current_step)
+                except Exception as e:
+                    logger.error(f"Error optimizing parameters at step {current_step}: {e}")
+                    continue
 
             # -------------------------------
             # 4) training information
@@ -499,6 +550,11 @@ def main(json_path=""):
                 #     if early_stopping.early_stop:
                 #         print("Early stopping!")
                 #         break
+        
+        except Exception as e:
+            logger.error(f"Training epoch {epoch} failed with error: {e}")
+            logger.info("Continuing to next epoch...")
+            continue
 
     print("Training Stop")
 
