@@ -33,6 +33,43 @@ from tensorboardX import SummaryWriter
 from collections import OrderedDict
 from skimage.transform import resize
 import lpips
+import platform
+
+
+def get_optimal_workers(requested_workers, distributed=False, world_size=1):
+    """
+    Determine optimal number of workers based on platform and configuration.
+    """
+    import multiprocessing
+    
+    # Get system info
+    max_cpu_workers = multiprocessing.cpu_count()
+    platform_name = platform.system()
+    
+    if distributed:
+        # For distributed training, divide workers among processes
+        base_workers = min(requested_workers // max(world_size, 1), 4)
+    else:
+        # base_workers = min(requested_workers, 4)
+        base_workers = requested_workers - 2
+    
+    # Platform-specific adjustments
+    if platform_name == "Windows":
+        # Windows has issues with multiprocessing in PyTorch
+        optimal_workers = min(base_workers, 2)
+        if optimal_workers > 0:
+            print(f"[INFO] Windows detected - using {optimal_workers} workers (max recommended: 2)")
+            print(f"[INFO] If you encounter multiprocessing errors, set dataloader_num_workers to 0")
+    elif platform_name == "Darwin":  # macOS
+        # macOS generally handles multiprocessing well but be conservative
+        optimal_workers = min(base_workers, max_cpu_workers // 2)
+    else:  # Linux and others
+        optimal_workers = min(base_workers, max_cpu_workers)
+    
+    # Ensure we don't exceed system capabilities
+    optimal_workers = max(0, min(optimal_workers, max_cpu_workers))
+    
+    return optimal_workers
 
 
 def main(json_path=""):
@@ -138,7 +175,12 @@ def main(json_path=""):
                     seed=seed,
                 )
                 # Safe configuration for distributed training
-                num_workers = max(0, min(dataset_opt["dataloader_num_workers"] // opt["num_gpu"], 4))
+                world_size = opt.get("world_size", 1)
+                num_workers = get_optimal_workers(
+                    dataset_opt["dataloader_num_workers"], 
+                    distributed=True, 
+                    world_size=world_size
+                )
                 train_loader = DataLoader(
                     train_set,
                     batch_size=dataset_opt["dataloader_batch_size"] // opt["num_gpu"],
@@ -152,9 +194,10 @@ def main(json_path=""):
                 )
             else:
                 # Safe configuration for single GPU training
-                num_workers = max(0, min(dataset_opt["dataloader_num_workers"], 4))
-                if os.name == 'nt':  # Windows
-                    num_workers = 0  # Force single-threaded on Windows to avoid multiprocessing issues
+                num_workers = get_optimal_workers(
+                    dataset_opt["dataloader_num_workers"], 
+                    distributed=False
+                )
                 train_loader = DataLoader(
                     train_set,
                     batch_size=dataset_opt["dataloader_batch_size"],
@@ -207,30 +250,67 @@ def main(json_path=""):
     # ----------------------------------------
     """
     
-    # Validate a few data samples before starting training
+    # Enhanced pre-training validation and setup
     if opt["rank"] == 0:
+        print("\n" + "=" * 80)
+        print("TRAINING INITIALIZATION")
+        print("=" * 80)
+        
+        # Display configuration summary
+        print(f"Model Type       : {opt.get('model', 'Unknown')}")
+        print(f"Task             : {opt.get('task', 'Unknown')}")
+        print(f"Batch Size       : {opt['datasets']['train']['dataloader_batch_size']}")
+        print(f"Workers          : {opt['datasets']['train']['dataloader_num_workers']}")
+        print(f"Learning Rate    : {opt['train']['G_optimizer_lr']:.2e}")
+        print(f"Total Samples    : {len(train_set):,d}")
+        print(f"Iterations/Epoch : {train_size:,d}")
+        if opt.get('dist', False):
+            print(f"Distributed      : Yes (World Size: {opt.get('world_size', 1)})")
+        else:
+            print(f"Distributed      : No")
+        print("-" * 80)
+        
         logger.info("Validating data samples before training...")
         try:
             # Validate dataset paths if available
             if hasattr(train_set, 'paths_H') and len(train_set.paths_H) > 0:
                 validate_data_files(train_set.paths_H, max_check=5)
+                print("✓ Dataset file validation passed")
             
             # Test loading first batch
+            print("✓ Testing first batch loading...")
             test_batch = next(iter(train_loader))
             if test_batch is not None:
+                print("✓ First batch loaded successfully")
                 logger.info("First batch loaded successfully")
-                # Check for NaN/Inf in first batch
+                
+                # Check tensor shapes and types
                 if 'L' in test_batch and test_batch['L'] is not None:
+                    print(f"  - L tensor shape: {test_batch['L'].shape}, dtype: {test_batch['L'].dtype}")
                     if torch.any(torch.isnan(test_batch['L'])) or torch.any(torch.isinf(test_batch['L'])):
-                        logger.warning("NaN/Inf detected in training data L")
+                        logger.warning("⚠ NaN/Inf detected in training data L")
+                        print("⚠ Warning: NaN/Inf detected in L data")
+                    
                 if 'H' in test_batch and test_batch['H'] is not None:
+                    print(f"  - H tensor shape: {test_batch['H'].shape}, dtype: {test_batch['H'].dtype}")
                     if torch.any(torch.isnan(test_batch['H'])) or torch.any(torch.isinf(test_batch['H'])):
-                        logger.warning("NaN/Inf detected in training data H")
+                        logger.warning("⚠ NaN/Inf detected in training data H")
+                        print("⚠ Warning: NaN/Inf detected in H data")
+                        
+                print("✓ Data validation completed")
             else:
                 logger.warning("First batch is None - potential data loading issues")
+                print("⚠ Warning: First batch is None")
         except Exception as e:
             logger.error(f"Data validation failed: {e}")
+            print(f"⚠ Data validation failed: {e}")
             logger.warning("Continuing with training, but expect potential issues...")
+            print("Continuing with training...")
+        
+        print("=" * 80)
+        print("STARTING TRAINING")
+        print("=" * 80)
+        print()
 
     for epoch in range(100000000):  # keep running
         if opt["dist"]:
@@ -272,20 +352,43 @@ def main(json_path=""):
             # 4) training information
             # -------------------------------
             if opt["rank"] == 0:
-                # Show progress only every 1000 iterations (or at specific milestones)
+                # Enhanced progress display with multiple intervals
+                logs = model.current_log()
+                
+                # Quick progress every 100 iterations
+                if current_step % 100 == 0 or current_step == 1:
+                    progress_message = f"\r[{current_step:8,d}] LR:{model.current_learning_rate():.2e} | Loss:{logs.get('G_loss', 0):.4f}"
+                    print(progress_message, end="", flush=True)
+                
+                # Detailed progress every 1000 iterations
                 if current_step % 1000 == 0 or current_step == 1:
-                    logs = model.current_log()
-                    progress_message = f"Epoch:{epoch:3d} | Iter:{current_step:8,d} | LR:{model.current_learning_rate():.3e} | G_loss:{logs.get('G_loss', 0):.4f}"
-
-                    # Add additional losses if available
+                    print()  # New line
+                    print("=" * 80)
+                    print(f"TRAINING PROGRESS - Epoch {epoch:3d} | Iteration {current_step:8,d}")
+                    print("=" * 80)
+                    print(f"Learning Rate    : {model.current_learning_rate():.6e}")
+                    print(f"Total Loss       : {logs.get('G_loss', 0):.6f}")
+                    
+                    # Add detailed loss breakdown if available
                     if "G_loss_image" in logs:
-                        progress_message += f" | Img:{logs['G_loss_image']:.4f}"
+                        print(f"Image Loss       : {logs['G_loss_image']:.6f}")
                     if "G_loss_frequency" in logs:
-                        progress_message += f" | Freq:{logs['G_loss_frequency']:.4f}"
+                        print(f"Frequency Loss   : {logs['G_loss_frequency']:.6f}")
                     if "G_loss_preceptual" in logs:
-                        progress_message += f" | Perc:{logs['G_loss_preceptual']:.4f}"
-
-                    print(progress_message)  # Always new line for 1000-iter updates
+                        print(f"Perceptual Loss  : {logs['G_loss_preceptual']:.6f}")
+                    
+                    # Calculate and show training speed
+                    if hasattr(model, '_last_time'):
+                        current_time = time.time()
+                        time_per_1k_iters = current_time - model._last_time
+                        iters_per_sec = 1000 / time_per_1k_iters if time_per_1k_iters > 0 else 0
+                        print(f"Speed            : {iters_per_sec:.2f} iter/sec ({time_per_1k_iters:.1f}s/1k iters)")
+                        model._last_time = current_time
+                    else:
+                        model._last_time = time.time()
+                    
+                    print("=" * 80)
+                    print()
 
             # Detailed logging at checkpoint intervals
             if (
@@ -342,9 +445,10 @@ def main(json_path=""):
             # 6) testing
             # -------------------------------
             if current_step % opt["train"]["checkpoint_test"] == 0 and opt["rank"] == 0:
-                print(
-                    f"\n[Testing at iteration {current_step}]"
-                )  # New line for testing start
+                print()
+                print("\n" + "=" * 80)
+                print(f"VALIDATION PHASE - Iteration {current_step:8,d}")
+                print("=" * 80)
 
                 # create folder for FID
                 img_dir_tmp_H = os.path.join(opt["path"]["images"], "tempH")
@@ -366,11 +470,17 @@ def main(json_path=""):
                 test_results["G_loss_preceptual"] = []
 
                 total_test_samples = len(test_loader)
+                print(f"Processing {total_test_samples} validation samples...\n")
+                
                 for idx, test_data in enumerate(test_loader):
                     with torch.no_grad():
-                        # Show test progress
-                        test_progress = f"Testing: {idx + 1}/{total_test_samples} ({((idx + 1) / total_test_samples) * 100:.1f}%)"
-                        print(f"\r{test_progress}", end="", flush=True)
+                        # Show test progress with better formatting
+                        progress_bar_width = 50
+                        progress = (idx + 1) / total_test_samples
+                        filled_width = int(progress_bar_width * progress)
+                        bar = "█" * filled_width + "░" * (progress_bar_width - filled_width)
+                        test_progress = f"\rValidation: [{bar}] {idx + 1:3d}/{total_test_samples} ({progress * 100:.1f}%)"
+                        print(test_progress, end="", flush=True)
 
                         img_info = test_data["img_info"][0]
                         img_dir = os.path.join(opt["path"]["images"], img_info)
@@ -486,7 +596,10 @@ def main(json_path=""):
                                 np.clip(H_img, 0, 1) * 255,
                             )
 
-                print()  # New line after test progress completion
+                print("\n")  # New line after test progress completion
+                print("-" * 80)
+                print("VALIDATION RESULTS")
+                print("-" * 80)
 
                 # summarize psnr/ssim/lpips
                 ave_psnr = np.mean(test_results["psnr"])
@@ -521,9 +634,16 @@ def main(json_path=""):
                 print(log)
                 fid = eval(log.replace("FID:  ", ""))
 
-                # testing log
+                # Enhanced testing log with better formatting
+                print(f"Average PSNR     : {ave_psnr:8.4f} dB")
+                print(f"Average SSIM     : {ave_ssim:8.6f}")
+                print(f"Average LPIPS    : {ave_lpips:8.6f}")
+                print(f"FID Score        : {fid:8.4f}")
+                print("=" * 80)
+                print()
+                
                 logger.info(
-                    "<epoch:{:3d}, iter:{:8,d}, Average PSNR : {:<.2f}; Average Average SSIM : {:<.4f}; LPIPS : {:<.4f}; FID : {:<.2f}".format(
+                    "<epoch:{:3d}, iter:{:8,d}, Average PSNR : {:<.4f}; Average SSIM : {:<.6f}; LPIPS : {:<.6f}; FID : {:<.4f}".format(
                         epoch, current_step, ave_psnr, ave_ssim, ave_lpips, fid
                     )
                 )
@@ -552,8 +672,11 @@ def main(json_path=""):
                 #         break
         
         except Exception as e:
-            logger.error(f"Training epoch {epoch} failed with error: {e}")
-            logger.info("Continuing to next epoch...")
+            if opt["rank"] == 0:
+                print(f"\n⚠ Training epoch {epoch} failed with error: {e}")
+                logger.error(f"Training epoch {epoch} failed with error: {e}")
+                logger.info("Continuing to next epoch...")
+                print("Continuing to next epoch...\n")
             continue
 
     print("Training Stop")

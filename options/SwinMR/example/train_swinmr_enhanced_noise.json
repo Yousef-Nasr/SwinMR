@@ -45,19 +45,12 @@
                 "R30",
                 "R40",
                 "R50",
-                "R60",
-                "R70",
-                "R80",
-                "R90",
                 "S10",
                 "S20",
                 "S30",
                 "S40",
-                "S50",
-                "S60",
-                "S70",
-                "S80",
-                "S90"
+                "S50"
+
             ],
             "is_noise": false,
             "noise_level": 0.0,
@@ -65,7 +58,7 @@
             "is_mini_dataset": false,
             "mini_dataset_prec": 1,
             "dataloader_shuffle": true,
-            "dataloader_num_workers": 0,
+            "dataloader_num_workers": 4,
             "dataloader_batch_size": 2
         },
         "test": {
