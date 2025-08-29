@@ -563,47 +563,47 @@ def main(json_path=""):
                                 
                                 # Save merged comparison images (first 20 samples)
                                 if idx < 20:
-                                # Create merged image with labels: GT | Noisy | Predicted
-                                h, w = H_img.shape[:2]
-                                label_height = 30
-                                merged_img = np.ones((h + label_height, w * 3), dtype=np.float32)
-                                
-                                # Place images side by side (offset by label height)
-                                merged_img[label_height:, :w] = H_img  # Ground Truth
-                                merged_img[label_height:, w:2*w] = L_img  # Noisy (Zero-filled)
-                                merged_img[label_height:, 2*w:3*w] = E_img  # Predicted (Reconstructed)
-                                
-                                # Create merged results directory
-                                merged_dir = os.path.join(opt["path"]["images"], "merged_comparisons")
-                                util.mkdir(merged_dir)
-                                
-                                if PIL_AVAILABLE:
-                                    # Convert to PIL for text labels
-                                    merged_pil = Image.fromarray((np.clip(merged_img, 0, 1) * 255).astype(np.uint8))
-                                    draw = ImageDraw.Draw(merged_pil)
+                                    # Create merged image with labels: GT | Noisy | Predicted
+                                    h, w = H_img.shape[:2]
+                                    label_height = 30
+                                    merged_img = np.ones((h + label_height, w * 3), dtype=np.float32)
                                     
-                                    # Add labels (use default font)
-                                    try:
-                                        draw.text((w//2-30, 5), "Ground Truth", fill=0)
-                                        draw.text((w+w//2-20, 5), "Noisy Input", fill=0)
-                                        draw.text((2*w+w//2-25, 5), "Predicted", fill=0)
-                                    except:
-                                        pass  # Skip labels if font issues
+                                    # Place images side by side (offset by label height)
+                                    merged_img[label_height:, :w] = H_img  # Ground Truth
+                                    merged_img[label_height:, w:2*w] = L_img  # Noisy (Zero-filled)
+                                    merged_img[label_height:, 2*w:3*w] = E_img  # Predicted (Reconstructed)
                                     
-                                    # Save merged image with labels
-                                    merged_pil.save(
-                                        os.path.join(
-                                            merged_dir, f"comparison_{current_step:05d}_sample_{idx:03d}.png"
+                                    # Create merged results directory
+                                    merged_dir = os.path.join(opt["path"]["images"], "merged_comparisons")
+                                    util.mkdir(merged_dir)
+                                    
+                                    if PIL_AVAILABLE:
+                                        # Convert to PIL for text labels
+                                        merged_pil = Image.fromarray((np.clip(merged_img, 0, 1) * 255).astype(np.uint8))
+                                        draw = ImageDraw.Draw(merged_pil)
+                                        
+                                        # Add labels (use default font)
+                                        try:
+                                            draw.text((w//2-30, 5), "Ground Truth", fill=0)
+                                            draw.text((w+w//2-20, 5), "Noisy Input", fill=0)
+                                            draw.text((2*w+w//2-25, 5), "Predicted", fill=0)
+                                        except:
+                                            pass  # Skip labels if font issues
+                                        
+                                        # Save merged image with labels
+                                        merged_pil.save(
+                                            os.path.join(
+                                                merged_dir, f"comparison_{current_step:05d}_sample_{idx:03d}.png"
+                                            )
                                         )
-                                    )
-                                else:
-                                    # Fallback: save without labels using cv2
-                                    cv2.imwrite(
-                                        os.path.join(
-                                            merged_dir, f"comparison_{current_step:05d}_sample_{idx:03d}.png"
-                                        ),
-                                        np.clip(merged_img, 0, 1) * 255,
-                                    )
+                                    else:
+                                        # Fallback: save without labels using cv2
+                                        cv2.imwrite(
+                                            os.path.join(
+                                                merged_dir, f"comparison_{current_step:05d}_sample_{idx:03d}.png"
+                                            ),
+                                            np.clip(merged_img, 0, 1) * 255,
+                                        )
 
                             # Save temp images for FID calculation (only for full testing)
                             if calculate_fid and opt["datasets"]["test"].get("resize_for_fid", False):
