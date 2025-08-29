@@ -428,13 +428,30 @@ def main(json_path=""):
                     print(f"✅ Model saved successfully!\n")
                 
                 # -------------------------------
-                # 6) testing
+                # 6) testing (optimized for speed)
                 # -------------------------------
                 if current_step % opt["train"]["checkpoint_test"] == 0 and opt["rank"] == 0:
-                    print()
-                    print("\n" + "=" * 80)
-                    print(f"VALIDATION PHASE - Iteration {current_step:8,d}")
-                    print("=" * 80)
+                    # Determine testing strategy based on iteration
+                    is_major_milestone = (current_step % 1000 == 0) or (current_step % opt["train"]["checkpoint_save"] == 0)
+                    
+                    if is_major_milestone:
+                        # Full testing for major milestones
+                        print()
+                        print("\n" + "=" * 80)
+                        print(f"FULL VALIDATION - Iteration {current_step:8,d} (Major Milestone)")
+                        print("=" * 80)
+                        test_subset_size = None  # Test all samples
+                        save_images = True
+                        calculate_fid = True
+                    else:
+                        # Fast subset testing for frequent checks
+                        print()
+                        print("\n" + "-" * 60)
+                        print(f"QUICK VALIDATION - Iteration {current_step:8,d} (Subset)")
+                        print("-" * 60)
+                        test_subset_size = 50  # Test only 50 samples for speed
+                        save_images = False  # Skip image saving for speed
+                        calculate_fid = False  # Skip FID calculation for speed
 
                     # create folder for FID
                     img_dir_tmp_H = os.path.join(opt["path"]["images"], "tempH")
@@ -456,14 +473,29 @@ def main(json_path=""):
                     test_results["G_loss_preceptual"] = []
 
                     total_test_samples = len(test_loader)
-                    print(f"Processing {total_test_samples} validation samples...")
-                    print(f"Saving merged comparisons for first 20 samples...\n")
+                    
+                    if test_subset_size is not None:
+                        actual_test_samples = min(test_subset_size, total_test_samples)
+                        print(f"Processing {actual_test_samples}/{total_test_samples} validation samples (fast mode)...")
+                        if save_images:
+                            print(f"Saving merged comparisons for first 20 samples...")
+                        print()
+                    else:
+                        actual_test_samples = total_test_samples
+                        print(f"Processing all {total_test_samples} validation samples (full mode)...")
+                        print(f"Saving merged comparisons for first 20 samples...")
+                        print()
                     
                     for idx, test_data in enumerate(test_loader):
+                        # Break early if using subset testing
+                        if test_subset_size is not None and idx >= test_subset_size:
+                            break
+                            
                         with torch.no_grad():
-                            # Show detailed test progress for each sample
-                            test_progress = f"\rTesting sample {idx + 1:3d}/{total_test_samples} ({((idx + 1) / total_test_samples) * 100:.1f}%) - Processing..."
-                            print(test_progress, end="", flush=True)
+                            # Show progress (less frequent updates for speed)
+                            if idx % 10 == 0 or idx < 10 or idx == actual_test_samples - 1:
+                                test_progress = f"\rTesting sample {idx + 1:3d}/{actual_test_samples} ({((idx + 1) / actual_test_samples) * 100:.1f}%) - Processing..."
+                                print(test_progress, end="", flush=True)
 
                             img_info = test_data["img_info"][0]
                             img_dir = os.path.join(opt["path"]["images"], img_info)
@@ -505,30 +537,32 @@ def main(json_path=""):
                             test_results["ssim"].append(current_ssim)
                             test_results["lpips"].append(current_lpips)
 
-                            # Save individual samples (first 5 only)
-                            if idx < 5:
-                                util.mkdir(img_dir)
-                                cv2.imwrite(
-                                    os.path.join(
-                                        img_dir, "ZF_{:05d}.png".format(current_step)
-                                    ),
-                                    np.clip(L_img, 0, 1) * 255,
-                                )
-                                cv2.imwrite(
-                                    os.path.join(
-                                        img_dir, "Recon_{:05d}.png".format(current_step)
-                                    ),
-                                    np.clip(E_img, 0, 1) * 255,
-                                )
-                                cv2.imwrite(
-                                    os.path.join(
-                                        img_dir, "GT_{:05d}.png".format(current_step)
-                                    ),
-                                    np.clip(H_img, 0, 1) * 255,
-                                )
-                            
-                            # Save merged comparison images (first 20 samples)
-                            if idx < 20:
+                            # Save images only for major milestones
+                            if save_images:
+                                # Save individual samples (first 5 only)
+                                if idx < 5:
+                                    util.mkdir(img_dir)
+                                    cv2.imwrite(
+                                        os.path.join(
+                                            img_dir, "ZF_{:05d}.png".format(current_step)
+                                        ),
+                                        np.clip(L_img, 0, 1) * 255,
+                                    )
+                                    cv2.imwrite(
+                                        os.path.join(
+                                            img_dir, "Recon_{:05d}.png".format(current_step)
+                                        ),
+                                        np.clip(E_img, 0, 1) * 255,
+                                    )
+                                    cv2.imwrite(
+                                        os.path.join(
+                                            img_dir, "GT_{:05d}.png".format(current_step)
+                                        ),
+                                        np.clip(H_img, 0, 1) * 255,
+                                    )
+                                
+                                # Save merged comparison images (first 20 samples)
+                                if idx < 20:
                                 # Create merged image with labels: GT | Noisy | Predicted
                                 h, w = H_img.shape[:2]
                                 label_height = 30
@@ -571,8 +605,8 @@ def main(json_path=""):
                                         np.clip(merged_img, 0, 1) * 255,
                                     )
 
-                            # Save temp images for FID calculation
-                            if opt["datasets"]["test"].get("resize_for_fid", False):
+                            # Save temp images for FID calculation (only for full testing)
+                            if calculate_fid and opt["datasets"]["test"].get("resize_for_fid", False):
                                 resize_for_fid = opt["datasets"]["test"]["resize_for_fid"]
                                 cv2.imwrite(
                                     os.path.join(
@@ -604,7 +638,7 @@ def main(json_path=""):
                                     )
                                     * 255,
                                 )
-                            else:
+                            elif calculate_fid:
                                 cv2.imwrite(
                                     os.path.join(
                                         img_dir_tmp_L, "ZF_{:05d}.png".format(idx)
@@ -625,46 +659,63 @@ def main(json_path=""):
                                 )
 
                     print("\n")  # New line after test progress completion
-                    print("-" * 80)
-                    print("VALIDATION RESULTS")
-                    print("-" * 80)
+                    
+                    if is_major_milestone:
+                        print("-" * 80)
+                        print("FULL VALIDATION RESULTS")
+                        print("-" * 80)
+                    else:
+                        print("-" * 40)
+                        print("QUICK VALIDATION RESULTS")
+                        print("-" * 40)
 
                     # summarize psnr/ssim/lpips
                     ave_psnr = np.mean(test_results["psnr"])
                     ave_ssim = np.mean(test_results["ssim"])
                     ave_lpips = np.mean(test_results["lpips"])
 
-                    # calculate FID
-                    if opt["dist"]:
-                        # DistributedDataParallel (If multiple GPUs are used to train, use the 2nd GPU for FID calculation.)
-                        log = os.popen(
-                            "{} -m pytorch_fid {} {} ".format(
-                                sys.executable, img_dir_tmp_H, img_dir_tmp_E
-                            )
-                        ).read()
-                    else:
-                        # DataParallel (If multiple GPUs are used to train, use the 2nd GPU for FID calculation for unbalance of GPU menory use.)
-                        if len(opt["gpu_ids"]) > 1:
-                            log = os.popen(
-                                "{} -m pytorch_fid --device cuda:1 {} {} ".format(
-                                    sys.executable, img_dir_tmp_H, img_dir_tmp_E
-                                )
-                            ).read()
-                        else:
+                    # calculate FID (only for major milestones)
+                    if calculate_fid:
+                        print("Calculating FID score...")
+                        if opt["dist"]:
+                            # DistributedDataParallel (If multiple GPUs are used to train, use the 2nd GPU for FID calculation.)
                             log = os.popen(
                                 "{} -m pytorch_fid {} {} ".format(
                                     sys.executable, img_dir_tmp_H, img_dir_tmp_E
                                 )
                             ).read()
-                    print(log)
-                    fid = eval(log.replace("FID:  ", ""))
+                        else:
+                            # DataParallel (If multiple GPUs are used to train, use the 2nd GPU for FID calculation for unbalance of GPU menory use.)
+                            if len(opt["gpu_ids"]) > 1:
+                                log = os.popen(
+                                    "{} -m pytorch_fid --device cuda:1 {} {} ".format(
+                                        sys.executable, img_dir_tmp_H, img_dir_tmp_E
+                                    )
+                                ).read()
+                            else:
+                                log = os.popen(
+                                    "{} -m pytorch_fid {} {} ".format(
+                                        sys.executable, img_dir_tmp_H, img_dir_tmp_E
+                                    )
+                                ).read()
+                        print(log)
+                        fid = eval(log.replace("FID:  ", ""))
+                    else:
+                        fid = 0.0  # Skip FID for quick tests
 
                     # Enhanced testing log with better formatting
                     print(f"Average PSNR     : {ave_psnr:8.4f} dB")
                     print(f"Average SSIM     : {ave_ssim:8.6f}")
                     print(f"Average LPIPS    : {ave_lpips:8.6f}")
-                    print(f"FID Score        : {fid:8.4f}")
-                    print("=" * 80)
+                    if calculate_fid:
+                        print(f"FID Score        : {fid:8.4f}")
+                    else:
+                        print(f"FID Score        : Skipped (quick test)")
+                    
+                    if is_major_milestone:
+                        print("=" * 80)
+                    else:
+                        print("-" * 40)
                     print()
                     
                     logger.info(
@@ -673,18 +724,21 @@ def main(json_path=""):
                         )
                     )
 
+                    # Log to tensorboard (distinguish between full and quick tests)
+                    prefix = "VALIDATION_FULL" if is_major_milestone else "VALIDATION_QUICK"
                     logger_tensorboard.add_scalar(
-                        "VALIDATION PSNR", ave_psnr, global_step=current_step
+                        f"{prefix}_PSNR", ave_psnr, global_step=current_step
                     )
                     logger_tensorboard.add_scalar(
-                        "VALIDATION SSIM", ave_ssim, global_step=current_step
+                        f"{prefix}_SSIM", ave_ssim, global_step=current_step
                     )
                     logger_tensorboard.add_scalar(
-                        "VALIDATION LPIPS", ave_lpips, global_step=current_step
+                        f"{prefix}_LPIPS", ave_lpips, global_step=current_step
                     )
-                    logger_tensorboard.add_scalar(
-                        "VALIDATION FID", fid, global_step=current_step
-                    )
+                    if calculate_fid:
+                        logger_tensorboard.add_scalar(
+                            f"{prefix}_FID", fid, global_step=current_step
+                        )
 
             # Detailed logging at checkpoint intervals
             if (
