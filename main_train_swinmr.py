@@ -50,8 +50,7 @@ def get_optimal_workers(requested_workers, distributed=False, world_size=1):
         # For distributed training, divide workers among processes
         base_workers = min(requested_workers // max(world_size, 1), 4)
     else:
-        # base_workers = min(requested_workers, 4)
-        base_workers = requested_workers - 2
+        base_workers = max(0, min(requested_workers, 4))
     
     # Platform-specific adjustments
     if platform_name == "Windows":
@@ -352,30 +351,30 @@ def main(json_path=""):
             # 4) training information
             # -------------------------------
             if opt["rank"] == 0:
-                # Enhanced progress display with multiple intervals
                 logs = model.current_log()
                 
-                # Quick progress every 100 iterations
-                if current_step % 100 == 0 or current_step == 1:
-                    progress_message = f"\r[{current_step:8,d}] LR:{model.current_learning_rate():.2e} | Loss:{logs.get('G_loss', 0):.4f}"
-                    print(progress_message, end="", flush=True)
+                # Show progress every iteration inline
+                progress_message = f"\r[{current_step:8,d}] Epoch:{epoch:3d} | LR:{model.current_learning_rate():.2e} | Loss:{logs.get('G_loss', 0):.4f}"
                 
-                # Detailed progress every 1000 iterations
-                if current_step % 1000 == 0 or current_step == 1:
-                    print()  # New line
+                # Add additional losses inline if available
+                if "G_loss_image" in logs:
+                    progress_message += f" | Img:{logs['G_loss_image']:.4f}"
+                if "G_loss_frequency" in logs:
+                    progress_message += f" | Freq:{logs['G_loss_frequency']:.4f}"
+                if "G_loss_preceptual" in logs:
+                    progress_message += f" | Perc:{logs['G_loss_preceptual']:.4f}"
+                
+                # Print inline progress (overwrites previous line)
+                print(progress_message, end="", flush=True)
+                
+                # New line and detailed summary every 1000 iterations
+                if current_step % 1000 == 0:
+                    print()  # New line after inline progress
                     print("=" * 80)
-                    print(f"TRAINING PROGRESS - Epoch {epoch:3d} | Iteration {current_step:8,d}")
+                    print(f"MILESTONE - Iteration {current_step:8,d} | Epoch {epoch:3d}")
                     print("=" * 80)
                     print(f"Learning Rate    : {model.current_learning_rate():.6e}")
                     print(f"Total Loss       : {logs.get('G_loss', 0):.6f}")
-                    
-                    # Add detailed loss breakdown if available
-                    if "G_loss_image" in logs:
-                        print(f"Image Loss       : {logs['G_loss_image']:.6f}")
-                    if "G_loss_frequency" in logs:
-                        print(f"Frequency Loss   : {logs['G_loss_frequency']:.6f}")
-                    if "G_loss_preceptual" in logs:
-                        print(f"Perceptual Loss  : {logs['G_loss_preceptual']:.6f}")
                     
                     # Calculate and show training speed
                     if hasattr(model, '_last_time'):
@@ -388,7 +387,7 @@ def main(json_path=""):
                         model._last_time = time.time()
                     
                     print("=" * 80)
-                    print()
+                    print()  # Extra line for spacing
 
             # Detailed logging at checkpoint intervals
             if (
@@ -474,12 +473,8 @@ def main(json_path=""):
                 
                 for idx, test_data in enumerate(test_loader):
                     with torch.no_grad():
-                        # Show test progress with better formatting
-                        progress_bar_width = 50
-                        progress = (idx + 1) / total_test_samples
-                        filled_width = int(progress_bar_width * progress)
-                        bar = "█" * filled_width + "░" * (progress_bar_width - filled_width)
-                        test_progress = f"\rValidation: [{bar}] {idx + 1:3d}/{total_test_samples} ({progress * 100:.1f}%)"
+                        # Show detailed test progress for each sample
+                        test_progress = f"\rTesting sample {idx + 1:3d}/{total_test_samples} ({((idx + 1) / total_test_samples) * 100:.1f}%) - Processing..."
                         print(test_progress, end="", flush=True)
 
                         img_info = test_data["img_info"][0]
