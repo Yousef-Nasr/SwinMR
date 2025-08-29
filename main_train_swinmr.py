@@ -613,17 +613,17 @@ def main(json_path=""):
                                     except:
                                         pass  # Skip labels if font issues
                                     
-                                    # Save merged image with labels
+                                    # Save merged image with labels (consistent naming for overwrite)
                                     merged_pil.save(
                                         os.path.join(
-                                            merged_dir, f"comparison_{current_step:05d}_sample_{idx:03d}.png"
+                                            merged_dir, f"comparison_sample_{saved_merged_count:02d}.png"
                                         )
                                     )
                                 else:
-                                    # Fallback: save without labels using cv2
+                                    # Fallback: save without labels using cv2 (consistent naming for overwrite)
                                     cv2.imwrite(
                                         os.path.join(
-                                            merged_dir, f"comparison_{current_step:05d}_sample_{idx:03d}.png"
+                                            merged_dir, f"comparison_sample_{saved_merged_count:02d}.png"
                                         ),
                                         np.clip(merged_img, 0, 1) * 255,
                                     )
