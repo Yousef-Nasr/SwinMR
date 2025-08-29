@@ -443,6 +443,7 @@ def main(json_path=""):
                         test_subset_size = None  # Test all samples
                         save_images = True
                         calculate_fid = True
+                        save_merged_images = True
                     else:
                         # Fast subset testing for frequent checks
                         print()
@@ -450,8 +451,9 @@ def main(json_path=""):
                         print(f"QUICK VALIDATION - Iteration {current_step:8,d} (Subset)")
                         print("-" * 60)
                         test_subset_size = 50  # Test only 50 samples for speed
-                        save_images = False  # Skip image saving for speed
+                        save_images = False  # Skip individual image saving for speed
                         calculate_fid = False  # Skip FID calculation for speed
+                        save_merged_images = True  # Always save merged images
 
                     # create folder for FID
                     img_dir_tmp_H = os.path.join(opt["path"]["images"], "tempH")
@@ -477,13 +479,15 @@ def main(json_path=""):
                     if test_subset_size is not None:
                         actual_test_samples = min(test_subset_size, total_test_samples)
                         print(f"Processing {actual_test_samples}/{total_test_samples} validation samples (fast mode)...")
-                        if save_images:
-                            print(f"Saving merged comparisons for first 20 samples...")
+                        if save_merged_images:
+                            merged_save_count = min(20, actual_test_samples)
+                            print(f"Saving merged comparisons for first {merged_save_count} samples...")
                         print()
                     else:
                         actual_test_samples = total_test_samples
                         print(f"Processing all {total_test_samples} validation samples (full mode)...")
-                        print(f"Saving merged comparisons for first 20 samples...")
+                        if save_merged_images:
+                            print(f"Saving merged comparisons for first 20 samples...")
                         print()
                     
                     for idx, test_data in enumerate(test_loader):
@@ -561,8 +565,8 @@ def main(json_path=""):
                                         np.clip(H_img, 0, 1) * 255,
                                     )
                                 
-                                # Save merged comparison images (first 20 samples)
-                                if idx < 20:
+                            # Save merged comparison images (first 20 samples) - for both fast and full tests
+                            if save_merged_images and idx < 20:
                                     # Create merged image with labels: GT | Noisy | Predicted
                                     h, w = H_img.shape[:2]
                                     label_height = 30
