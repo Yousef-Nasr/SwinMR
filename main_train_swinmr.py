@@ -417,6 +417,274 @@ def main(json_path=""):
                         
                         print("=" * 80)
                         print()  # Extra line for spacing
+                
+                # -------------------------------
+                # 5) save model
+                # -------------------------------
+                if current_step % opt["train"]["checkpoint_save"] == 0 and opt["rank"] == 0:
+                    print(f"\n💾 Saving model at iteration {current_step:,d}...")
+                    logger.info("Saving the model.")
+                    model.save(current_step)
+                    print(f"✅ Model saved successfully!\n")
+                
+                # -------------------------------
+                # 6) testing
+                # -------------------------------
+                if current_step % opt["train"]["checkpoint_test"] == 0 and opt["rank"] == 0:
+                    print()
+                    print("\n" + "=" * 80)
+                    print(f"VALIDATION PHASE - Iteration {current_step:8,d}")
+                    print("=" * 80)
+
+                    # create folder for FID
+                    img_dir_tmp_H = os.path.join(opt["path"]["images"], "tempH")
+                    util.mkdir(img_dir_tmp_H)
+                    img_dir_tmp_E = os.path.join(opt["path"]["images"], "tempE")
+                    util.mkdir(img_dir_tmp_E)
+                    img_dir_tmp_L = os.path.join(opt["path"]["images"], "tempL")
+                    util.mkdir(img_dir_tmp_L)
+
+                    # create result dict
+                    test_results = OrderedDict()
+                    test_results["psnr"] = []
+                    test_results["ssim"] = []
+                    test_results["lpips"] = []
+
+                    test_results["G_loss"] = []
+                    test_results["G_loss_image"] = []
+                    test_results["G_loss_frequency"] = []
+                    test_results["G_loss_preceptual"] = []
+
+                    total_test_samples = len(test_loader)
+                    print(f"Processing {total_test_samples} validation samples...")
+                    print(f"Saving merged comparisons for first 20 samples...\n")
+                    
+                    for idx, test_data in enumerate(test_loader):
+                        with torch.no_grad():
+                            # Show detailed test progress for each sample
+                            test_progress = f"\rTesting sample {idx + 1:3d}/{total_test_samples} ({((idx + 1) / total_test_samples) * 100:.1f}%) - Processing..."
+                            print(test_progress, end="", flush=True)
+
+                            img_info = test_data["img_info"][0]
+                            img_dir = os.path.join(opt["path"]["images"], img_info)
+
+                            # testing and adjust resolution
+                            model.feed_data(test_data)
+                            model.check_windowsize()
+                            model.test()
+                            model.recover_windowsize()
+
+                            # acquire test result
+                            results = model.current_results_gpu()
+
+                            # calculate LPIPS (GPU | torch.tensor)
+                            L_img = results["L"]
+                            E_img = results["E"]
+                            H_img = results["H"]
+                            current_lpips = (
+                                util.calculate_lpips_single(loss_fn_alex, H_img, E_img)
+                                .data.squeeze()
+                                .float()
+                                .cpu()
+                                .numpy()
+                            )
+
+                            # calculate PSNR SSIM (CPU | np.float)
+                            L_img = util.tensor2float(L_img)
+                            E_img = util.tensor2float(E_img)
+                            H_img = util.tensor2float(H_img)
+                            current_psnr = util.calculate_psnr_single(
+                                H_img, E_img, border=0
+                            )
+                            current_ssim = util.calculate_ssim_single(
+                                H_img, E_img, border=0
+                            )
+
+                            # record metrics
+                            test_results["psnr"].append(current_psnr)
+                            test_results["ssim"].append(current_ssim)
+                            test_results["lpips"].append(current_lpips)
+
+                            # Save individual samples (first 5 only)
+                            if idx < 5:
+                                util.mkdir(img_dir)
+                                cv2.imwrite(
+                                    os.path.join(
+                                        img_dir, "ZF_{:05d}.png".format(current_step)
+                                    ),
+                                    np.clip(L_img, 0, 1) * 255,
+                                )
+                                cv2.imwrite(
+                                    os.path.join(
+                                        img_dir, "Recon_{:05d}.png".format(current_step)
+                                    ),
+                                    np.clip(E_img, 0, 1) * 255,
+                                )
+                                cv2.imwrite(
+                                    os.path.join(
+                                        img_dir, "GT_{:05d}.png".format(current_step)
+                                    ),
+                                    np.clip(H_img, 0, 1) * 255,
+                                )
+                            
+                            # Save merged comparison images (first 20 samples)
+                            if idx < 20:
+                                # Create merged image with labels: GT | Noisy | Predicted
+                                h, w = H_img.shape[:2]
+                                label_height = 30
+                                merged_img = np.ones((h + label_height, w * 3), dtype=np.float32)
+                                
+                                # Place images side by side (offset by label height)
+                                merged_img[label_height:, :w] = H_img  # Ground Truth
+                                merged_img[label_height:, w:2*w] = L_img  # Noisy (Zero-filled)
+                                merged_img[label_height:, 2*w:3*w] = E_img  # Predicted (Reconstructed)
+                                
+                                # Create merged results directory
+                                merged_dir = os.path.join(opt["path"]["images"], "merged_comparisons")
+                                util.mkdir(merged_dir)
+                                
+                                if PIL_AVAILABLE:
+                                    # Convert to PIL for text labels
+                                    merged_pil = Image.fromarray((np.clip(merged_img, 0, 1) * 255).astype(np.uint8))
+                                    draw = ImageDraw.Draw(merged_pil)
+                                    
+                                    # Add labels (use default font)
+                                    try:
+                                        draw.text((w//2-30, 5), "Ground Truth", fill=0)
+                                        draw.text((w+w//2-20, 5), "Noisy Input", fill=0)
+                                        draw.text((2*w+w//2-25, 5), "Predicted", fill=0)
+                                    except:
+                                        pass  # Skip labels if font issues
+                                    
+                                    # Save merged image with labels
+                                    merged_pil.save(
+                                        os.path.join(
+                                            merged_dir, f"comparison_{current_step:05d}_sample_{idx:03d}.png"
+                                        )
+                                    )
+                                else:
+                                    # Fallback: save without labels using cv2
+                                    cv2.imwrite(
+                                        os.path.join(
+                                            merged_dir, f"comparison_{current_step:05d}_sample_{idx:03d}.png"
+                                        ),
+                                        np.clip(merged_img, 0, 1) * 255,
+                                    )
+
+                            # Save temp images for FID calculation
+                            if opt["datasets"]["test"].get("resize_for_fid", False):
+                                resize_for_fid = opt["datasets"]["test"]["resize_for_fid"]
+                                cv2.imwrite(
+                                    os.path.join(
+                                        img_dir_tmp_L, "ZF_{:05d}.png".format(idx)
+                                    ),
+                                    resize(
+                                        np.clip(L_img, 0, 1),
+                                        (resize_for_fid[0], resize_for_fid[1]),
+                                    )
+                                    * 255,
+                                )
+                                cv2.imwrite(
+                                    os.path.join(
+                                        img_dir_tmp_E, "Recon_{:05d}.png".format(idx)
+                                    ),
+                                    resize(
+                                        np.clip(E_img, 0, 1),
+                                        (resize_for_fid[0], resize_for_fid[1]),
+                                    )
+                                    * 255,
+                                )
+                                cv2.imwrite(
+                                    os.path.join(
+                                        img_dir_tmp_H, "GT_{:05d}.png".format(idx)
+                                    ),
+                                    resize(
+                                        np.clip(H_img, 0, 1),
+                                        (resize_for_fid[0], resize_for_fid[1]),
+                                    )
+                                    * 255,
+                                )
+                            else:
+                                cv2.imwrite(
+                                    os.path.join(
+                                        img_dir_tmp_L, "ZF_{:05d}.png".format(idx)
+                                    ),
+                                    np.clip(L_img, 0, 1) * 255,
+                                )
+                                cv2.imwrite(
+                                    os.path.join(
+                                        img_dir_tmp_E, "Recon_{:05d}.png".format(idx)
+                                    ),
+                                    np.clip(E_img, 0, 1) * 255,
+                                )
+                                cv2.imwrite(
+                                    os.path.join(
+                                        img_dir_tmp_H, "GT_{:05d}.png".format(idx)
+                                    ),
+                                    np.clip(H_img, 0, 1) * 255,
+                                )
+
+                    print("\n")  # New line after test progress completion
+                    print("-" * 80)
+                    print("VALIDATION RESULTS")
+                    print("-" * 80)
+
+                    # summarize psnr/ssim/lpips
+                    ave_psnr = np.mean(test_results["psnr"])
+                    ave_ssim = np.mean(test_results["ssim"])
+                    ave_lpips = np.mean(test_results["lpips"])
+
+                    # calculate FID
+                    if opt["dist"]:
+                        # DistributedDataParallel (If multiple GPUs are used to train, use the 2nd GPU for FID calculation.)
+                        log = os.popen(
+                            "{} -m pytorch_fid {} {} ".format(
+                                sys.executable, img_dir_tmp_H, img_dir_tmp_E
+                            )
+                        ).read()
+                    else:
+                        # DataParallel (If multiple GPUs are used to train, use the 2nd GPU for FID calculation for unbalance of GPU menory use.)
+                        if len(opt["gpu_ids"]) > 1:
+                            log = os.popen(
+                                "{} -m pytorch_fid --device cuda:1 {} {} ".format(
+                                    sys.executable, img_dir_tmp_H, img_dir_tmp_E
+                                )
+                            ).read()
+                        else:
+                            log = os.popen(
+                                "{} -m pytorch_fid {} {} ".format(
+                                    sys.executable, img_dir_tmp_H, img_dir_tmp_E
+                                )
+                            ).read()
+                    print(log)
+                    fid = eval(log.replace("FID:  ", ""))
+
+                    # Enhanced testing log with better formatting
+                    print(f"Average PSNR     : {ave_psnr:8.4f} dB")
+                    print(f"Average SSIM     : {ave_ssim:8.6f}")
+                    print(f"Average LPIPS    : {ave_lpips:8.6f}")
+                    print(f"FID Score        : {fid:8.4f}")
+                    print("=" * 80)
+                    print()
+                    
+                    logger.info(
+                        "<epoch:{:3d}, iter:{:8,d}, Average PSNR : {:<.4f}; Average SSIM : {:<.6f}; LPIPS : {:<.6f}; FID : {:<.4f}".format(
+                            epoch, current_step, ave_psnr, ave_ssim, ave_lpips, fid
+                        )
+                    )
+
+                    logger_tensorboard.add_scalar(
+                        "VALIDATION PSNR", ave_psnr, global_step=current_step
+                    )
+                    logger_tensorboard.add_scalar(
+                        "VALIDATION SSIM", ave_ssim, global_step=current_step
+                    )
+                    logger_tensorboard.add_scalar(
+                        "VALIDATION LPIPS", ave_lpips, global_step=current_step
+                    )
+                    logger_tensorboard.add_scalar(
+                        "VALIDATION FID", fid, global_step=current_step
+                    )
 
             # Detailed logging at checkpoint intervals
             if (
@@ -462,285 +730,7 @@ def main(json_path=""):
                         global_step=current_step,
                     )
 
-            # -------------------------------
-            # 5) save model
-            # -------------------------------
-            if current_step % opt["train"]["checkpoint_save"] == 0 and opt["rank"] == 0:
-                print(f"\n💾 Saving model at iteration {current_step:,d}...")
-                logger.info("Saving the model.")
-                model.save(current_step)
-                print(f"✅ Model saved successfully!\n")
-
-            # -------------------------------
-            # 6) testing
-            # -------------------------------
-            if current_step % opt["train"]["checkpoint_test"] == 0 and opt["rank"] == 0:
-                print()
-                print("\n" + "=" * 80)
-                print(f"VALIDATION PHASE - Iteration {current_step:8,d}")
-                print("=" * 80)
-
-                # create folder for FID
-                img_dir_tmp_H = os.path.join(opt["path"]["images"], "tempH")
-                util.mkdir(img_dir_tmp_H)
-                img_dir_tmp_E = os.path.join(opt["path"]["images"], "tempE")
-                util.mkdir(img_dir_tmp_E)
-                img_dir_tmp_L = os.path.join(opt["path"]["images"], "tempL")
-                util.mkdir(img_dir_tmp_L)
-
-                # create result dict
-                test_results = OrderedDict()
-                test_results["psnr"] = []
-                test_results["ssim"] = []
-                test_results["lpips"] = []
-
-                test_results["G_loss"] = []
-                test_results["G_loss_image"] = []
-                test_results["G_loss_frequency"] = []
-                test_results["G_loss_preceptual"] = []
-
-                total_test_samples = len(test_loader)
-                print(f"Processing {total_test_samples} validation samples...")
-                print(f"Saving merged comparisons for first 20 samples...\n")
-                
-                for idx, test_data in enumerate(test_loader):
-                    with torch.no_grad():
-                        # Show detailed test progress for each sample
-                        test_progress = f"\rTesting sample {idx + 1:3d}/{total_test_samples} ({((idx + 1) / total_test_samples) * 100:.1f}%) - Processing..."
-                        print(test_progress, end="", flush=True)
-
-                        img_info = test_data["img_info"][0]
-                        img_dir = os.path.join(opt["path"]["images"], img_info)
-
-                        # testing and adjust resolution
-                        model.feed_data(test_data)
-                        model.check_windowsize()
-                        model.test()
-                        model.recover_windowsize()
-
-                        # acquire test result
-                        results = model.current_results_gpu()
-
-                        # calculate LPIPS (GPU | torch.tensor)
-                        L_img = results["L"]
-                        E_img = results["E"]
-                        H_img = results["H"]
-                        current_lpips = (
-                            util.calculate_lpips_single(loss_fn_alex, H_img, E_img)
-                            .data.squeeze()
-                            .float()
-                            .cpu()
-                            .numpy()
-                        )
-
-                        # calculate PSNR SSIM (CPU | np.float)
-                        L_img = util.tensor2float(L_img)
-                        E_img = util.tensor2float(E_img)
-                        H_img = util.tensor2float(H_img)
-                        current_psnr = util.calculate_psnr_single(
-                            H_img, E_img, border=0
-                        )
-                        current_ssim = util.calculate_ssim_single(
-                            H_img, E_img, border=0
-                        )
-
-                        # record metrics
-                        test_results["psnr"].append(current_psnr)
-                        test_results["ssim"].append(current_ssim)
-                        test_results["lpips"].append(current_lpips)
-
-                        # Save individual samples (first 5 only)
-                        if idx < 5:
-                            util.mkdir(img_dir)
-                            cv2.imwrite(
-                                os.path.join(
-                                    img_dir, "ZF_{:05d}.png".format(current_step)
-                                ),
-                                np.clip(L_img, 0, 1) * 255,
-                            )
-                            cv2.imwrite(
-                                os.path.join(
-                                    img_dir, "Recon_{:05d}.png".format(current_step)
-                                ),
-                                np.clip(E_img, 0, 1) * 255,
-                            )
-                            cv2.imwrite(
-                                os.path.join(
-                                    img_dir, "GT_{:05d}.png".format(current_step)
-                                ),
-                                np.clip(H_img, 0, 1) * 255,
-                            )
-                        
-                        # Save merged comparison images (first 20 samples)
-                        if idx < 20:
-                            # Create merged image with labels: GT | Noisy | Predicted
-                            h, w = H_img.shape[:2]
-                            label_height = 30
-                            merged_img = np.ones((h + label_height, w * 3), dtype=np.float32)
-                            
-                            # Place images side by side (offset by label height)
-                            merged_img[label_height:, :w] = H_img  # Ground Truth
-                            merged_img[label_height:, w:2*w] = L_img  # Noisy (Zero-filled)
-                            merged_img[label_height:, 2*w:3*w] = E_img  # Predicted (Reconstructed)
-                            
-                            # Create merged results directory
-                            merged_dir = os.path.join(opt["path"]["images"], "merged_comparisons")
-                            util.mkdir(merged_dir)
-                            
-                            if PIL_AVAILABLE:
-                                # Convert to PIL for text labels
-                                merged_pil = Image.fromarray((np.clip(merged_img, 0, 1) * 255).astype(np.uint8))
-                                draw = ImageDraw.Draw(merged_pil)
-                                
-                                # Add labels (use default font)
-                                try:
-                                    draw.text((w//2-30, 5), "Ground Truth", fill=0)
-                                    draw.text((w+w//2-20, 5), "Noisy Input", fill=0)
-                                    draw.text((2*w+w//2-25, 5), "Predicted", fill=0)
-                                except:
-                                    pass  # Skip labels if font issues
-                                
-                                # Save merged image with labels
-                                merged_pil.save(
-                                    os.path.join(
-                                        merged_dir, f"comparison_{current_step:05d}_sample_{idx:03d}.png"
-                                    )
-                                )
-                            else:
-                                # Fallback: save without labels using cv2
-                                cv2.imwrite(
-                                    os.path.join(
-                                        merged_dir, f"comparison_{current_step:05d}_sample_{idx:03d}.png"
-                                    ),
-                                    np.clip(merged_img, 0, 1) * 255,
-                                )
-
-                        if opt["datasets"]["test"]["resize_for_fid"]:
-                            resize_for_fid = opt["datasets"]["test"]["resize_for_fid"]
-                            cv2.imwrite(
-                                os.path.join(
-                                    img_dir_tmp_L, "ZF_{:05d}.png".format(idx)
-                                ),
-                                resize(
-                                    np.clip(L_img, 0, 1),
-                                    (resize_for_fid[0], resize_for_fid[1]),
-                                )
-                                * 255,
-                            )
-                            cv2.imwrite(
-                                os.path.join(
-                                    img_dir_tmp_E, "Recon_{:05d}.png".format(idx)
-                                ),
-                                resize(
-                                    np.clip(E_img, 0, 1),
-                                    (resize_for_fid[0], resize_for_fid[1]),
-                                )
-                                * 255,
-                            )
-                            cv2.imwrite(
-                                os.path.join(
-                                    img_dir_tmp_H, "GT_{:05d}.png".format(idx)
-                                ),
-                                resize(
-                                    np.clip(H_img, 0, 1),
-                                    (resize_for_fid[0], resize_for_fid[1]),
-                                )
-                                * 255,
-                            )
-                        else:
-                            cv2.imwrite(
-                                os.path.join(
-                                    img_dir_tmp_L, "ZF_{:05d}.png".format(idx)
-                                ),
-                                np.clip(L_img, 0, 1) * 255,
-                            )
-                            cv2.imwrite(
-                                os.path.join(
-                                    img_dir_tmp_E, "Recon_{:05d}.png".format(idx)
-                                ),
-                                np.clip(E_img, 0, 1) * 255,
-                            )
-                            cv2.imwrite(
-                                os.path.join(
-                                    img_dir_tmp_H, "GT_{:05d}.png".format(idx)
-                                ),
-                                np.clip(H_img, 0, 1) * 255,
-                            )
-
-                print("\n")  # New line after test progress completion
-                print("-" * 80)
-                print("VALIDATION RESULTS")
-                print("-" * 80)
-
-                # summarize psnr/ssim/lpips
-                ave_psnr = np.mean(test_results["psnr"])
-                # std_psnr = np.std(test_results['psnr'], ddof=1)
-                ave_ssim = np.mean(test_results["ssim"])
-                # std_ssim = np.std(test_results['ssim'], ddof=1)
-                ave_lpips = np.mean(test_results["lpips"])
-                # std_lpips = np.std(test_results['lpips'], ddof=1)
-
-                # calculate FID
-                if opt["dist"]:
-                    # DistributedDataParallel (If multiple GPUs are used to train, use the 2nd GPU for FID calculation.)
-                    log = os.popen(
-                        "{} -m pytorch_fid {} {} ".format(
-                            sys.executable, img_dir_tmp_H, img_dir_tmp_E
-                        )
-                    ).read()
-                else:
-                    # DataParallel (If multiple GPUs are used to train, use the 2nd GPU for FID calculation for unbalance of GPU menory use.)
-                    if len(opt["gpu_ids"]) > 1:
-                        log = os.popen(
-                            "{} -m pytorch_fid --device cuda:1 {} {} ".format(
-                                sys.executable, img_dir_tmp_H, img_dir_tmp_E
-                            )
-                        ).read()
-                    else:
-                        log = os.popen(
-                            "{} -m pytorch_fid {} {} ".format(
-                                sys.executable, img_dir_tmp_H, img_dir_tmp_E
-                            )
-                        ).read()
-                print(log)
-                fid = eval(log.replace("FID:  ", ""))
-
-                # Enhanced testing log with better formatting
-                print(f"Average PSNR     : {ave_psnr:8.4f} dB")
-                print(f"Average SSIM     : {ave_ssim:8.6f}")
-                print(f"Average LPIPS    : {ave_lpips:8.6f}")
-                print(f"FID Score        : {fid:8.4f}")
-                print("=" * 80)
-                print()
-                
-                logger.info(
-                    "<epoch:{:3d}, iter:{:8,d}, Average PSNR : {:<.4f}; Average SSIM : {:<.6f}; LPIPS : {:<.6f}; FID : {:<.4f}".format(
-                        epoch, current_step, ave_psnr, ave_ssim, ave_lpips, fid
-                    )
-                )
-
-                logger_tensorboard.add_scalar(
-                    "VALIDATION PSNR", ave_psnr, global_step=current_step
-                )
-                logger_tensorboard.add_scalar(
-                    "VALIDATION SSIM", ave_ssim, global_step=current_step
-                )
-                logger_tensorboard.add_scalar(
-                    "VALIDATION LPIPS", ave_lpips, global_step=current_step
-                )
-                logger_tensorboard.add_scalar(
-                    "VALIDATION FID", fid, global_step=current_step
-                )
-
-                # # early stopping
-                # if opt['train']['is_early_stopping']:
-                #     early_stopping(ave_psnr, model, epoch, current_step)
-                #     if early_stopping.is_save:
-                #         logger.info('Saving the model by early stopping')
-                #         model.save(f'best_{current_step}')
-                #     if early_stopping.early_stop:
-                #         print("Early stopping!")
-                #         break
+                # (Moved to inside training loop above)
         
         except Exception as e:
             if opt["rank"] == 0:
