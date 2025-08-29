@@ -34,6 +34,7 @@ from collections import OrderedDict
 from skimage.transform import resize
 import lpips
 import platform
+import random
 try:
     from PIL import Image, ImageDraw, ImageFont
     PIL_AVAILABLE = True
@@ -476,29 +477,46 @@ def main(json_path=""):
 
                     total_test_samples = len(test_loader)
                     
+                    # Generate random indices for testing
                     if test_subset_size is not None:
                         actual_test_samples = min(test_subset_size, total_test_samples)
-                        print(f"Processing {actual_test_samples}/{total_test_samples} validation samples (fast mode)...")
+                        # Random subset for fast testing
+                        test_indices = random.sample(range(total_test_samples), actual_test_samples)
+                        print(f"Processing {actual_test_samples}/{total_test_samples} validation samples (fast mode - random subset)...")
                         if save_merged_images:
                             merged_save_count = min(20, actual_test_samples)
-                            print(f"Saving merged comparisons for first {merged_save_count} samples...")
+                            print(f"Saving merged comparisons for {merged_save_count} random samples...")
                         print()
                     else:
                         actual_test_samples = total_test_samples
-                        print(f"Processing all {total_test_samples} validation samples (full mode)...")
+                        # Use all samples but randomize order
+                        test_indices = list(range(total_test_samples))
+                        random.shuffle(test_indices)
+                        print(f"Processing all {total_test_samples} validation samples (full mode - random order)...")
                         if save_merged_images:
-                            print(f"Saving merged comparisons for first 20 samples...")
+                            print(f"Saving merged comparisons for first 20 samples (random selection)...")
                         print()
                     
+                    # Create a list to track which samples to save as merged images
+                    if save_merged_images:
+                        merged_save_indices = set(random.sample(test_indices[:actual_test_samples], min(20, actual_test_samples)))
+                    else:
+                        merged_save_indices = set()
+                    
+                    processed_count = 0
+                    saved_merged_count = 0
+                    
                     for idx, test_data in enumerate(test_loader):
-                        # Break early if using subset testing
-                        if test_subset_size is not None and idx >= test_subset_size:
-                            break
+                        # Skip samples not in our random selection
+                        if idx not in test_indices[:actual_test_samples]:
+                            continue
                             
+                        processed_count += 1
+                        
                         with torch.no_grad():
                             # Show progress (less frequent updates for speed)
-                            if idx % 10 == 0 or idx < 10 or idx == actual_test_samples - 1:
-                                test_progress = f"\rTesting sample {idx + 1:3d}/{actual_test_samples} ({((idx + 1) / actual_test_samples) * 100:.1f}%) - Processing..."
+                            if processed_count % 10 == 0 or processed_count <= 10 or processed_count == actual_test_samples:
+                                test_progress = f"\rTesting sample {processed_count:3d}/{actual_test_samples} ({(processed_count / actual_test_samples) * 100:.1f}%) - Processing (random idx: {idx})..."
                                 print(test_progress, end="", flush=True)
 
                             img_info = test_data["img_info"][0]
@@ -565,8 +583,9 @@ def main(json_path=""):
                                         np.clip(H_img, 0, 1) * 255,
                                     )
                                 
-                            # Save merged comparison images (first 20 samples) - for both fast and full tests
-                            if save_merged_images and idx < 20:
+                            # Save merged comparison images (random selection) - for both fast and full tests
+                            if save_merged_images and idx in merged_save_indices and saved_merged_count < 20:
+                                saved_merged_count += 1
                                     # Create merged image with labels: GT | Noisy | Predicted
                                     h, w = H_img.shape[:2]
                                     label_height = 30
