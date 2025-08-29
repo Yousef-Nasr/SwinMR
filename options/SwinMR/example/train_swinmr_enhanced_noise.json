@@ -50,7 +50,6 @@
                 "S30",
                 "S40",
                 "S50"
-
             ],
             "is_noise": false,
             "noise_level": 0.0,
@@ -165,7 +164,7 @@
         "G_regularizer_clipstep": null,
         "G_param_strict": true,
         "E_param_strict": true,
-        "checkpoint_test": 10,
+        "checkpoint_test": 1000,
         "checkpoint_save": 10000,
         "checkpoint_print": 200,
         "is_early_stopping": false,

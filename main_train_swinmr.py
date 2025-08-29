@@ -34,6 +34,12 @@ from collections import OrderedDict
 from skimage.transform import resize
 import lpips
 import platform
+try:
+    from PIL import Image, ImageDraw, ImageFont
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
+    print("[INFO] PIL not available - merged images will be saved without labels")
 
 
 def get_optimal_workers(requested_workers, distributed=False, world_size=1):
@@ -267,6 +273,15 @@ def main(json_path=""):
             print(f"Distributed      : Yes (World Size: {opt.get('world_size', 1)})")
         else:
             print(f"Distributed      : No")
+        print(f"Test Every       : {opt['train']['checkpoint_test']:,d} iterations")
+        print(f"Save Every       : {opt['train']['checkpoint_save']:,d} iterations")
+        
+        # Show checkpoint resumption info
+        if current_step > 0:
+            print(f"Resuming from    : Iteration {current_step:,d} (continuing training)")
+        else:
+            print(f"Starting fresh   : New training from iteration 1")
+        
         print("-" * 80)
         
         logger.info("Validating data samples before training...")
@@ -451,8 +466,10 @@ def main(json_path=""):
             # 5) save model
             # -------------------------------
             if current_step % opt["train"]["checkpoint_save"] == 0 and opt["rank"] == 0:
+                print(f"\n💾 Saving model at iteration {current_step:,d}...")
                 logger.info("Saving the model.")
                 model.save(current_step)
+                print(f"✅ Model saved successfully!\n")
 
             # -------------------------------
             # 6) testing
@@ -483,7 +500,8 @@ def main(json_path=""):
                 test_results["G_loss_preceptual"] = []
 
                 total_test_samples = len(test_loader)
-                print(f"Processing {total_test_samples} validation samples...\n")
+                print(f"Processing {total_test_samples} validation samples...")
+                print(f"Saving merged comparisons for first 20 samples...\n")
                 
                 for idx, test_data in enumerate(test_loader):
                     with torch.no_grad():
@@ -531,7 +549,7 @@ def main(json_path=""):
                         test_results["ssim"].append(current_ssim)
                         test_results["lpips"].append(current_lpips)
 
-                        # save samples
+                        # Save individual samples (first 5 only)
                         if idx < 5:
                             util.mkdir(img_dir)
                             cv2.imwrite(
@@ -552,6 +570,50 @@ def main(json_path=""):
                                 ),
                                 np.clip(H_img, 0, 1) * 255,
                             )
+                        
+                        # Save merged comparison images (first 20 samples)
+                        if idx < 20:
+                            # Create merged image with labels: GT | Noisy | Predicted
+                            h, w = H_img.shape[:2]
+                            label_height = 30
+                            merged_img = np.ones((h + label_height, w * 3), dtype=np.float32)
+                            
+                            # Place images side by side (offset by label height)
+                            merged_img[label_height:, :w] = H_img  # Ground Truth
+                            merged_img[label_height:, w:2*w] = L_img  # Noisy (Zero-filled)
+                            merged_img[label_height:, 2*w:3*w] = E_img  # Predicted (Reconstructed)
+                            
+                            # Create merged results directory
+                            merged_dir = os.path.join(opt["path"]["images"], "merged_comparisons")
+                            util.mkdir(merged_dir)
+                            
+                            if PIL_AVAILABLE:
+                                # Convert to PIL for text labels
+                                merged_pil = Image.fromarray((np.clip(merged_img, 0, 1) * 255).astype(np.uint8))
+                                draw = ImageDraw.Draw(merged_pil)
+                                
+                                # Add labels (use default font)
+                                try:
+                                    draw.text((w//2-30, 5), "Ground Truth", fill=0)
+                                    draw.text((w+w//2-20, 5), "Noisy Input", fill=0)
+                                    draw.text((2*w+w//2-25, 5), "Predicted", fill=0)
+                                except:
+                                    pass  # Skip labels if font issues
+                                
+                                # Save merged image with labels
+                                merged_pil.save(
+                                    os.path.join(
+                                        merged_dir, f"comparison_{current_step:05d}_sample_{idx:03d}.png"
+                                    )
+                                )
+                            else:
+                                # Fallback: save without labels using cv2
+                                cv2.imwrite(
+                                    os.path.join(
+                                        merged_dir, f"comparison_{current_step:05d}_sample_{idx:03d}.png"
+                                    ),
+                                    np.clip(merged_img, 0, 1) * 255,
+                                )
 
                         if opt["datasets"]["test"]["resize_for_fid"]:
                             resize_for_fid = opt["datasets"]["test"]["resize_for_fid"]
