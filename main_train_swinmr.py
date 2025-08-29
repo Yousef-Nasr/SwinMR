@@ -309,6 +309,13 @@ def main(json_path=""):
         print("=" * 80)
         print("STARTING TRAINING")
         print("=" * 80)
+        print("Training in progress... (you should see iteration updates below)")
+        
+        # Suppress PyTorch scheduler warnings (known issue with MultiStepLR)
+        import warnings
+        warnings.filterwarnings("ignore", message="Detected call of.*lr_scheduler.step.*")
+        warnings.filterwarnings("ignore", message="The epoch parameter in.*scheduler.step.*")
+        
         print()
 
     for epoch in range(100000000):  # keep running
@@ -319,8 +326,15 @@ def main(json_path=""):
             for i, train_data in enumerate(train_loader):
                 current_step += 1
 
+                # Show "Training started" message on first iteration
+                if current_step == 1 and opt["rank"] == 0:
+                    print("🚀 Training started! Iteration updates will appear below:")
+                    print()
+
                 # Skip batch if it's None (from safe_collate_fn)
                 if train_data is None:
+                    if opt["rank"] == 0:
+                        print(f"\n⚠ Skipping batch {i} due to data loading issues")
                     logger.warning(f"Skipping batch {i} due to data loading issues")
                     continue
 
@@ -347,47 +361,47 @@ def main(json_path=""):
                     logger.error(f"Error optimizing parameters at step {current_step}: {e}")
                     continue
 
-            # -------------------------------
-            # 4) training information
-            # -------------------------------
-            if opt["rank"] == 0:
-                logs = model.current_log()
-                
-                # Show progress every iteration inline
-                progress_message = f"\r[{current_step:8,d}] Epoch:{epoch:3d} | LR:{model.current_learning_rate():.2e} | Loss:{logs.get('G_loss', 0):.4f}"
-                
-                # Add additional losses inline if available
-                if "G_loss_image" in logs:
-                    progress_message += f" | Img:{logs['G_loss_image']:.4f}"
-                if "G_loss_frequency" in logs:
-                    progress_message += f" | Freq:{logs['G_loss_frequency']:.4f}"
-                if "G_loss_preceptual" in logs:
-                    progress_message += f" | Perc:{logs['G_loss_preceptual']:.4f}"
-                
-                # Print inline progress (overwrites previous line)
-                print(progress_message, end="", flush=True)
-                
-                # New line and detailed summary every 1000 iterations
-                if current_step % 1000 == 0:
-                    print()  # New line after inline progress
-                    print("=" * 80)
-                    print(f"MILESTONE - Iteration {current_step:8,d} | Epoch {epoch:3d}")
-                    print("=" * 80)
-                    print(f"Learning Rate    : {model.current_learning_rate():.6e}")
-                    print(f"Total Loss       : {logs.get('G_loss', 0):.6f}")
+                # -------------------------------
+                # 4) training information
+                # -------------------------------
+                if opt["rank"] == 0:
+                    logs = model.current_log()
                     
-                    # Calculate and show training speed
-                    if hasattr(model, '_last_time'):
-                        current_time = time.time()
-                        time_per_1k_iters = current_time - model._last_time
-                        iters_per_sec = 1000 / time_per_1k_iters if time_per_1k_iters > 0 else 0
-                        print(f"Speed            : {iters_per_sec:.2f} iter/sec ({time_per_1k_iters:.1f}s/1k iters)")
-                        model._last_time = current_time
-                    else:
-                        model._last_time = time.time()
+                    # Show progress every iteration inline
+                    progress_message = f"\r[{current_step:8,d}] Epoch:{epoch:3d} | LR:{model.current_learning_rate():.2e} | Loss:{logs.get('G_loss', 0):.4f}"
                     
-                    print("=" * 80)
-                    print()  # Extra line for spacing
+                    # Add additional losses inline if available
+                    if "G_loss_image" in logs:
+                        progress_message += f" | Img:{logs['G_loss_image']:.4f}"
+                    if "G_loss_frequency" in logs:
+                        progress_message += f" | Freq:{logs['G_loss_frequency']:.4f}"
+                    if "G_loss_preceptual" in logs:
+                        progress_message += f" | Perc:{logs['G_loss_preceptual']:.4f}"
+                    
+                    # Print inline progress (overwrites previous line)
+                    print(progress_message, end="", flush=True)
+                    
+                    # New line and detailed summary every 1000 iterations
+                    if current_step % 1000 == 0:
+                        print()  # New line after inline progress
+                        print("=" * 80)
+                        print(f"MILESTONE - Iteration {current_step:8,d} | Epoch {epoch:3d}")
+                        print("=" * 80)
+                        print(f"Learning Rate    : {model.current_learning_rate():.6e}")
+                        print(f"Total Loss       : {logs.get('G_loss', 0):.6f}")
+                        
+                        # Calculate and show training speed
+                        if hasattr(model, '_last_time'):
+                            current_time = time.time()
+                            time_per_1k_iters = current_time - model._last_time
+                            iters_per_sec = 1000 / time_per_1k_iters if time_per_1k_iters > 0 else 0
+                            print(f"Speed            : {iters_per_sec:.2f} iter/sec ({time_per_1k_iters:.1f}s/1k iters)")
+                            model._last_time = current_time
+                        else:
+                            model._last_time = time.time()
+                        
+                        print("=" * 80)
+                        print()  # Extra line for spacing
 
             # Detailed logging at checkpoint intervals
             if (
