@@ -1,5 +1,5 @@
 {
-    "task": "swinmr_enhanced_optimized",
+    "task": "swinmr_optimized",
     "model": "swinmr_npi",
     "mask": "G1D30",
     "gpu_ids": [
@@ -24,7 +24,7 @@
             "sigma": 15,
             "sigma_test": 15,
             "use_enhanced_noise": true,
-            "noise_config_path": "configs/noise_config_default.json",
+            "noise_config_path": "configs/noise_config_progressive.json",
             "random_mask_selection": true,
             "max_noise_types": 2,
             "min_noise_types": 1,
@@ -36,12 +36,12 @@
                 "G2D20",
                 "G2D30",
                 "G2D40",
+                "R20",
                 "R30",
                 "R40",
-                "R50",
+                "S20",
                 "S30",
-                "S40",
-                "S50"
+                "S40"
             ],
             "is_noise": false,
             "noise_level": 0.0,
@@ -50,7 +50,7 @@
             "mini_dataset_prec": 1,
             "dataloader_shuffle": true,
             "dataloader_num_workers": 4,
-            "dataloader_batch_size": 8
+            "dataloader_batch_size": 4
         },
         "test": {
             "name": "test_dataset",
@@ -60,7 +60,16 @@
             "sigma": 15,
             "sigma_test": 15,
             "use_enhanced_noise": false,
+            "noise_config_path": "configs/noise_config_default.json",
             "random_mask_selection": false,
+            "max_noise_types": 1,
+            "min_noise_types": 1,
+            "include_mask_as_noise": false,
+            "available_masks": [
+                "G1D30",
+                "G2D30",
+                "R30"
+            ],
             "is_noise": false,
             "noise_level": 0.0,
             "noise_var": 0.1,
@@ -100,33 +109,34 @@
         "G_lossfn_type": "charbonnier",
         "G_lossfn_weight": 1.0,
         "G_charbonnier_eps": 1e-9,
-        "alpha": 15,
-        "beta": 0.1,
-        "gamma": 0.0025,
+        "alpha": 12,
+        "beta": 0.08,
+        "gamma": 0.002,
         "E_decay": 0.999,
         "G_optimizer_type": "adam",
-        "G_optimizer_lr": 2e-4,
-        "G_optimizer_wd": 0,
-        "G_optimizer_clipgrad": null,
+        "G_optimizer_lr": 1e-4,
+        "G_optimizer_wd": 1e-4,
+        "G_optimizer_clipgrad": 0.1,
         "G_optimizer_reuse": true,
         "G_scheduler_type": "MultiStepLR",
         "G_scheduler_milestones": [
-            50000,
-            70000,
-            90000,
-            100000,
-            110000
+            15000,
+            25000,
+            35000,
+            45000,
+            55000,
+            65000
         ],
-        "G_scheduler_gamma": 0.5,
+        "G_scheduler_gamma": 0.7,
         "G_regularizer_orthstep": null,
         "G_regularizer_clipstep": null,
         "G_param_strict": true,
         "E_param_strict": true,
-        "checkpoint_test": 5000,
-        "checkpoint_save": 10000,
-        "checkpoint_print": 200,
+        "checkpoint_test": 500,
+        "checkpoint_save": 5000,
+        "checkpoint_print": 100,
         "is_early_stopping": false,
-        "early_stopping_num": 8,
+        "early_stopping_num": 5,
         "freeze_patch_embedding": false
     }
 }

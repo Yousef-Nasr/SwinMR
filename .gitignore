@@ -130,3 +130,14 @@ models/*.pth
 logs/
 tmp/
 temp/
+
+*.jpg
+*.png
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+*.ico
+*.webp
+*.svg
+*.eps
